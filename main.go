@@ -28,7 +28,8 @@ func main() {
 	}
 
 	// Register HTTP handlers
-	http.HandleFunc("/metrics", metricsHandler(ytSvc))
+	http.HandleFunc("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP)
+	http.HandleFunc("/scrape", metricsHandler(ytSvc))
 
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -11,7 +11,7 @@ import (
 	"google.golang.org/api/youtube/v3"
 )
 
-// metricsHandler handles the /metrics endpoint
+// metricsHandler handles the /scrape endpoint
 func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		videoID := r.URL.Query().Get("v")
