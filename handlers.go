@@ -15,35 +15,70 @@ import (
 func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		videoID := r.URL.Query().Get("v")
-		if videoID == "" {
-			http.Error(w, "missing required query parameter: v (YouTube video ID)", http.StatusBadRequest)
+		channelID := r.URL.Query().Get("channel")
+
+		// Check if both or neither parameters are provided
+		if videoID == "" && channelID == "" {
+			http.Error(w, "missing required query parameter: v (YouTube video ID) or channel (YouTube channel ID)", http.StatusBadRequest)
 			return
 		}
-		// keep exporter well-behaved; reject clearly bad IDs
-		if !videoIDRe.MatchString(videoID) {
-			http.Error(w, "invalid video ID format", http.StatusBadRequest)
+		if videoID != "" && channelID != "" {
+			http.Error(w, "provide either v (video ID) or channel (channel ID), not both", http.StatusBadRequest)
 			return
 		}
 
 		// Query YouTube API on *each* scrape request (no background work).
-		reqCtx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		reqCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second) // Increased timeout for channel requests
 		defer cancel()
 
-		video, err := fetchVideoDetails(reqCtx, ytSvc, videoID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("YouTube API error: %v", err), http.StatusBadGateway)
-			return
-		}
-		if video == nil {
-			http.Error(w, "video not found", http.StatusNotFound)
-			return
-		}
-
-		snap := processVideoData(video, videoID)
-
-		// Fresh, per-request registry that only contains THIS video's metrics.
+		// Fresh, per-request registry
 		reg := prometheus.NewRegistry()
-		reg.MustRegister(newSnapshotCollector(snap))
+
+		if videoID != "" {
+			// Handle video metrics (existing functionality)
+			if !videoIDRe.MatchString(videoID) {
+				http.Error(w, "invalid video ID format", http.StatusBadRequest)
+				return
+			}
+
+			video, err := fetchVideoDetails(reqCtx, ytSvc, videoID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("YouTube API error: %v", err), http.StatusBadGateway)
+				return
+			}
+			if video == nil {
+				http.Error(w, "video not found", http.StatusNotFound)
+				return
+			}
+
+			snap := processVideoData(video, videoID)
+			reg.MustRegister(newSnapshotCollector(snap))
+
+		} else if channelID != "" {
+			// Handle channel metrics (new functionality)
+			if !channelIDRe.MatchString(channelID) {
+				http.Error(w, "invalid channel ID format", http.StatusBadRequest)
+				return
+			}
+
+			channel, err := fetchChannelDetails(reqCtx, ytSvc, channelID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("YouTube API error: %v", err), http.StatusBadGateway)
+				return
+			}
+			if channel == nil {
+				http.Error(w, "channel not found", http.StatusNotFound)
+				return
+			}
+
+			channelSnap, err := processChannelData(reqCtx, ytSvc, channel, channelID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("YouTube API error processing channel data: %v", err), http.StatusBadGateway)
+				return
+			}
+
+			reg.MustRegister(newChannelSnapshotCollector(channelSnap))
+		}
 
 		// Serve metrics for just this registry.
 		promhttp.HandlerFor(reg, promhttp.HandlerOpts{
