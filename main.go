@@ -2,39 +2,39 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var (
-	addrFlag   = flag.String("addr", ":9473", "listen address")
-	apiKeyFlag = flag.String("api-key", "", "YouTube Data API key (overrides YOUTUBE_API_KEY)")
+const (
+	defaultPort = 9473
 )
 
 func main() {
-	flag.Parse()
-
-	apiKey := *apiKeyFlag
+	apiKey := os.Getenv("YOUTUBE_API_KEY")
 	if apiKey == "" {
-		apiKey = os.Getenv("YOUTUBE_API_KEY")
-	}
-	if apiKey == "" {
-		log.Fatal("You must provide an API key via -api-key or YOUTUBE_API_KEY")
+		log.Fatal("You must provide an API key via YOUTUBE_API_KEY")
 	}
 
 	ctx := context.Background()
 	ytSvc, err := newYouTubeService(ctx, apiKey)
 	if err != nil {
-		log.Fatalf("youtube.NewService: %v", err)
+		log.Fatalf("newYouTubeService: %v", err)
 	}
 
 	// Register HTTP handlers
 	http.HandleFunc("/metrics", metricsHandler(ytSvc))
 
-	log.Printf("Listening on %s …", *addrFlag)
-	if err := http.ListenAndServe(*addrFlag, nil); err != nil {
-		log.Fatal(err)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = strconv.Itoa(defaultPort)
 	}
+
+	log.Printf("Listening on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
