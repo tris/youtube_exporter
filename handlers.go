@@ -16,6 +16,7 @@ func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		videoID := r.URL.Query().Get("v")
 		channelID := r.URL.Query().Get("channel")
+		disableLive := r.URL.Query().Get("disable_live") == "true"
 
 		// Check if both or neither parameters are provided
 		if videoID == "" && channelID == "" {
@@ -71,7 +72,7 @@ func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 				return
 			}
 
-			channelSnap, err := processChannelData(reqCtx, ytSvc, channel, channelID)
+			channelSnap, err := processChannelData(reqCtx, ytSvc, channel, channelID, disableLive)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("YouTube API error processing channel data: %v", err), http.StatusBadGateway)
 				return

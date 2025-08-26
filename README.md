@@ -35,10 +35,10 @@ To get an API key:
 
 ## Usage
 
-### Video Metrics
+### Video metrics
 
-To scrape metrics for a specific YouTube video, make a request to `/scrape`
-with the video ID:
+To scrape metrics for a specific video, make a request to `/scrape` with the
+video ID:
 
 ```bash
 curl "http://localhost:9473/scrape?v=..."
@@ -47,10 +47,10 @@ curl "http://localhost:9473/scrape?v=..."
 The video ID is the 11-character identifier from YouTube URLs (e.g.,
 `yv2RtoIMNzA` from `https://www.youtube.com/watch?v=yv2RtoIMNzA`).
 
-### Channel Metrics
+### Channel metrics
 
-To scrape metrics for an entire YouTube channel, make a request to `/scrape`
-with the channel ID:
+To scrape metrics for an entire channel, make a request to `/scrape` with the
+channel ID:
 
 ```bash
 curl "http://localhost:9473/scrape?channel=..."
@@ -63,7 +63,7 @@ if you don't know your ID.
 
 ## Metrics
 
-### Video Metrics
+### Video metrics
 
 When querying individual videos (`?v=VIDEO_ID`):
 
@@ -78,7 +78,7 @@ When querying individual videos (`?v=VIDEO_ID`):
 
 All video metrics include `video_id` and `title` labels.
 
-### Channel Metrics
+### Channel metrics
 
 When querying channels (`?channel=CHANNEL_ID`):
 
@@ -95,7 +95,7 @@ Additionally, when querying a channel, the exporter will automatically
 discover and include metrics for all currently live streams from that channel
 using the same video metrics listed above.
 
-## Example Prometheus Config
+## Example Prometheus config
 
 ```yaml
 scrape_configs:
@@ -129,28 +129,68 @@ scrape_configs:
     - targets: ['localhost:9473']
 ```
 
-## API Rate Limits
+## API rate limits
 
-The YouTube Data API v3 has quota limits. Each request consumes quota units:
-- Video details: 1 unit per video
+The YouTube Data API is metered. Each request consumes:
+- Video details: 1 unit per batch (up to 50 videos)
 - Channel details: 1 unit per channel
 - Playlist items: 1 unit per page (50 items)
-- ~~Live stream search: 100 units per request~~ (no longer used)
+- Live stream search: 100 units per request (used sparingly; see below)
 
-**Efficient Implementation**: This exporter uses an optimized approach for finding
-live streams. Instead of using the expensive Search API (100 units), it fetches
-recent videos from the channel's uploads playlist and filters for live content.
-This reduces quota usage by ~95%:
+### Caching algorithm
 
-- **Old method**: 102+ units per channel query (with Search API)
-- **New method**: 5 units per channel query (with Playlist API)
+We use a hybrid approach to minimize quota usage while ensuring full discovery:
 
-Example daily usage at 1-minute intervals:
-- Old: 146,880 units/day (14.7x over default quota)
-- New: 7,200 units/day (well within 10,000 quota)
+**First request (per channel):**
+- **Channels with ≤4,950 videos (99 pages)**: Uses full pagination through all videos (cheaper than Search API)
+- **Channels with >4,950 videos**: Uses Search API (100 units) for comprehensive discovery
+- Caches discovered live stream IDs in memory
+- Results are cached to avoid repeating expensive operations
+
+**Subsequent requests:**
+- Skips expensive Search API entirely
+- Uses efficient playlist method to check 50 most recent uploads (1-2 units)
+- Refreshes cached stream details to verify they're still live (1 unit per 50 streams)
+- Removes ended streams from cache automatically
+
+**Quota usage breakdown:**
+
+First request (>4,950 videos):
+- Channel.List: 1 unit (for channel details)
+- Search.List: 100 units (find all live streams)
+- Videos.List: 1 unit (batched details for search results)
+- PlaylistItems.List: 1 unit (check 50 recent videos)
+- Videos.List: 1 unit (batched details for recent videos)
+- **Total: ~104 units**
+
+Subsequent requests (typical case with 1 live stream):
+- Channel.List: 1 unit (for channel details)
+- PlaylistItems.List: 1 unit (check 50 recent videos)
+- Videos.List: 1 unit (batched details for recent videos)
+- Videos.List: 0-1 units (refresh cached streams if any old ones exist)
+- **Total: 3-4 units** (3 if all streams are recent, 4 if old cached streams exist)
+
+**Summary:**
+- **First scrape (≤4,950 videos)**: Up to 99 units (full pagination)
+- **First scrape (>4,950 videos)**: ~104 units
+- **Subsequent scrapes**: 3-4 units typically
+- **With disable_live=true**: 1 unit (channel stats only)
+- **Daily usage at 1-minute intervals**: ~4,400 units typical (well within 10,000 quota)
+
+This approach ensures:
+- Long-running streams (even years old) are never missed
+- New streams are detected within one polling interval
+- Minimal ongoing quota consumption
+- Automatic cleanup of ended streams
 
 The default quota is 10,000 units per day. Monitor your usage in the Google
 Cloud Console and adjust scrape intervals accordingly.
+
+### Query parameters
+
+- `v`: YouTube video ID (for single video metrics)
+- `channel`: YouTube channel ID (for channel metrics)
+- `disable_live`: Set to `true` to skip live stream detection (channel requests only)
 
 ## Building
 
