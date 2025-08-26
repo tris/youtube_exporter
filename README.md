@@ -3,11 +3,12 @@
 youtube_exporter is a [Prometheus](https://prometheus.io/) exporter for
 [YouTube](https://www.youtube.com/) videos and channels.
 
-The exporter queries the YouTube Data API v3 to expose metrics for individual
-videos or entire channels. It supports monitoring video statistics (views,
-likes, concurrent viewers for live streams) and channel statistics
-(subscribers, total views, video count, plus all live streams from the
-channel).
+The exporter queries the
+[YouTube Data API](https://developers.google.com/youtube/v3) to expose metrics
+for individual videos or entire channels. It supports monitoring video
+statistics (views, likes, concurrent viewers for live streams) and channel
+statistics (subscribers, total views, video count, plus all live streams from
+the channel).
 
 ## Install
 
