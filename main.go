@@ -27,10 +27,11 @@ var videoIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
 // data snapshot for one scrape
 type ytSnapshot struct {
 	videoID            string
+	title              string
 	viewCount          float64
 	likeCount          float64
 	concurrentViewers  float64
-	liveBroadcastState string // "live" | "upcoming" | "none" (per snippet)
+	liveBroadcastState string  // "live" | "upcoming" | "none" (per snippet)
 	liveBinary         float64 // 1 if live, else 0
 }
 
@@ -45,7 +46,7 @@ type snapshotCollector struct {
 }
 
 func newSnapshotCollector(s ytSnapshot) *snapshotCollector {
-	labels := []string{"video_id"}
+	labels := []string{"video_id", "title"}
 	return &snapshotCollector{
 		s: s,
 		viewDesc: prometheus.NewDesc(
@@ -67,7 +68,7 @@ func newSnapshotCollector(s ytSnapshot) *snapshotCollector {
 		liveStateDesc: prometheus.NewDesc(
 			"youtube_video_live_status",
 			"Infometric with state label; 1 for the current state (\"live\", \"upcoming\", or \"none\").",
-			[]string{"video_id", "state"}, nil),
+			[]string{"video_id", "title", "state"}, nil),
 		upDesc: prometheus.NewDesc(
 			"youtube_video_scrape_success",
 			"1 if the scrape of YouTube API succeeded, else 0.",
@@ -85,13 +86,13 @@ func (c *snapshotCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *snapshotCollector) Collect(ch chan<- prometheus.Metric) {
-	lbls := []string{c.s.videoID}
+	lbls := []string{c.s.videoID, c.s.title}
 	ch <- prometheus.MustNewConstMetric(c.viewDesc, prometheus.GaugeValue, c.s.viewCount, lbls...)
 	ch <- prometheus.MustNewConstMetric(c.likeDesc, prometheus.GaugeValue, c.s.likeCount, lbls...)
 	ch <- prometheus.MustNewConstMetric(c.concurDesc, prometheus.GaugeValue, c.s.concurrentViewers, lbls...)
 	ch <- prometheus.MustNewConstMetric(c.liveDesc, prometheus.GaugeValue, c.s.liveBinary, lbls...)
 	// infometric: 1 for the current state only
-	ch <- prometheus.MustNewConstMetric(c.liveStateDesc, prometheus.GaugeValue, 1, c.s.videoID, c.s.liveBroadcastState)
+	ch <- prometheus.MustNewConstMetric(c.liveStateDesc, prometheus.GaugeValue, 1, c.s.videoID, c.s.title, c.s.liveBroadcastState)
 	ch <- prometheus.MustNewConstMetric(c.upDesc, prometheus.GaugeValue, 1, lbls...)
 }
 
@@ -169,8 +170,15 @@ func main() {
 			liveBinary = 1.0
 		}
 
+		// Extract title from snippet
+		var title string
+		if it.Snippet != nil {
+			title = it.Snippet.Title
+		}
+
 		snap := ytSnapshot{
 			videoID:            videoID,
+			title:              title,
 			viewCount:          viewCount,
 			likeCount:          likeCount,
 			concurrentViewers:  concurrent,
