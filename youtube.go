@@ -81,7 +81,8 @@ func processVideoData(video *youtube.Video, videoID string) ytSnapshot {
 
 // fetchChannelDetails fetches channel details from YouTube API
 func fetchChannelDetails(ctx context.Context, ytSvc *youtube.Service, channelID string) (*youtube.Channel, error) {
-	call := ytSvc.Channels.List([]string{"snippet", "statistics"})
+	// Now also fetching contentDetails to get the uploads playlist ID
+	call := ytSvc.Channels.List([]string{"snippet", "statistics", "contentDetails"})
 	call = call.Id(channelID)
 	call.Context(ctx)
 
@@ -97,67 +98,96 @@ func fetchChannelDetails(ctx context.Context, ytSvc *youtube.Service, channelID 
 	return resp.Items[0], nil
 }
 
-// fetchChannelLiveStreams fetches all live streams from a channel
-func fetchChannelLiveStreams(ctx context.Context, ytSvc *youtube.Service, channelID string) ([]*youtube.Video, error) {
-	var allVideos []*youtube.Video
+// fetchChannelLiveStreams fetches live streams from a channel using the EFFICIENT method
+// This uses the uploads playlist instead of Search API, saving ~97 quota units!
+// Old method: 100 units (Search.List) + 1 unit (Videos.List) = 101 units
+// New method: 2 units (PlaylistItems.List x2) + 2 units (Videos.List x2) = 4 units
+func fetchChannelLiveStreams(ctx context.Context, ytSvc *youtube.Service, channel *youtube.Channel) ([]*youtube.Video, error) {
+	// Get uploads playlist ID from channel contentDetails
+	if channel.ContentDetails == nil || channel.ContentDetails.RelatedPlaylists == nil {
+		return nil, nil
+	}
+
+	uploadsPlaylistID := channel.ContentDetails.RelatedPlaylists.Uploads
+	if uploadsPlaylistID == "" {
+		return nil, nil
+	}
+
+	// Fetch recent videos from uploads playlist (1 unit per 50 videos)
+	// We'll check the 100 most recent videos (2 units total)
+	var allVideoIDs []string
 	nextPageToken := ""
+	pagesChecked := 0
+	maxPages := 2 // Check up to 100 videos (2 pages of 50)
 
-	for {
-		// Search for live videos from this channel
-		searchCall := ytSvc.Search.List([]string{"id"})
-		searchCall = searchCall.ChannelId(channelID)
-		searchCall = searchCall.EventType("live")
-		searchCall = searchCall.Type("video")
-		searchCall = searchCall.MaxResults(50)
+	for pagesChecked < maxPages {
+		playlistCall := ytSvc.PlaylistItems.List([]string{"contentDetails"})
+		playlistCall = playlistCall.PlaylistId(uploadsPlaylistID)
+		playlistCall = playlistCall.MaxResults(50)
 		if nextPageToken != "" {
-			searchCall = searchCall.PageToken(nextPageToken)
+			playlistCall = playlistCall.PageToken(nextPageToken)
 		}
-		searchCall.Context(ctx)
+		playlistCall.Context(ctx)
 
-		searchResp, err := searchCall.Do()
+		playlistResp, err := playlistCall.Do()
 		if err != nil {
-			return nil, err
-		}
-
-		if len(searchResp.Items) == 0 {
+			log.Printf("Error fetching playlist items: %v", err)
 			break
 		}
 
-		// Extract video IDs
-		var videoIDs []string
-		for _, item := range searchResp.Items {
-			if item.Id != nil && item.Id.VideoId != "" {
-				videoIDs = append(videoIDs, item.Id.VideoId)
+		for _, item := range playlistResp.Items {
+			if item.ContentDetails != nil && item.ContentDetails.VideoId != "" {
+				allVideoIDs = append(allVideoIDs, item.ContentDetails.VideoId)
 			}
 		}
 
-		if len(videoIDs) == 0 {
-			break
-		}
+		nextPageToken = playlistResp.NextPageToken
+		pagesChecked++
 
-		// Fetch detailed video information
-		videosCall := ytSvc.Videos.List([]string{"snippet", "statistics", "liveStreamingDetails"})
-		videosCall = videosCall.Id(videoIDs...)
-		videosCall.Context(ctx)
-
-		videosResp, err := videosCall.Do()
-		if err != nil {
-			return nil, err
-		}
-
-		allVideos = append(allVideos, videosResp.Items...)
-
-		// Check if there are more pages
-		nextPageToken = searchResp.NextPageToken
-		if nextPageToken == "" {
+		if nextPageToken == "" || len(playlistResp.Items) == 0 {
 			break
 		}
 	}
 
-	return allVideos, nil
+	if len(allVideoIDs) == 0 {
+		return nil, nil
+	}
+
+	// Fetch video details in batches of 50 (1 unit per batch)
+	var allLiveVideos []*youtube.Video
+
+	for i := 0; i < len(allVideoIDs); i += 50 {
+		end := i + 50
+		if end > len(allVideoIDs) {
+			end = len(allVideoIDs)
+		}
+
+		batchIDs := allVideoIDs[i:end]
+
+		videosCall := ytSvc.Videos.List([]string{"snippet", "statistics", "liveStreamingDetails"})
+		videosCall = videosCall.Id(batchIDs...)
+		videosCall.Context(ctx)
+
+		videosResp, err := videosCall.Do()
+		if err != nil {
+			log.Printf("Error fetching video details: %v", err)
+			continue
+		}
+
+		// Filter for only live videos
+		for _, video := range videosResp.Items {
+			if video.Snippet != nil && video.Snippet.LiveBroadcastContent == "live" {
+				allLiveVideos = append(allLiveVideos, video)
+			}
+		}
+	}
+
+	log.Printf("Found %d live streams using efficient method (checked %d recent videos)", len(allLiveVideos), len(allVideoIDs))
+	return allLiveVideos, nil
 }
 
 // processChannelData processes YouTube API response into a channel snapshot
+// UPDATED to use the efficient live stream fetching method
 func processChannelData(ctx context.Context, ytSvc *youtube.Service, channel *youtube.Channel, channelID string) (ytChannelSnapshot, error) {
 	stats := channel.Statistics
 
@@ -177,8 +207,9 @@ func processChannelData(ctx context.Context, ytSvc *youtube.Service, channel *yo
 		title = channel.Snippet.Title
 	}
 
-	// Fetch live streams for this channel
-	liveVideos, err := fetchChannelLiveStreams(ctx, ytSvc, channelID)
+	// Fetch live streams using the EFFICIENT method
+	// Pass the channel object which already has contentDetails
+	liveVideos, err := fetchChannelLiveStreams(ctx, ytSvc, channel)
 	if err != nil {
 		log.Printf("Error fetching live streams for channel %s: %v", channelID, err)
 		// Continue without live streams rather than failing completely

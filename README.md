@@ -134,7 +134,20 @@ scrape_configs:
 The YouTube Data API v3 has quota limits. Each request consumes quota units:
 - Video details: 1 unit per video
 - Channel details: 1 unit per channel
-- Live stream search: 100 units per request
+- Playlist items: 1 unit per page (50 items)
+- ~~Live stream search: 100 units per request~~ (no longer used)
+
+**Efficient Implementation**: This exporter uses an optimized approach for finding
+live streams. Instead of using the expensive Search API (100 units), it fetches
+recent videos from the channel's uploads playlist and filters for live content.
+This reduces quota usage by ~95%:
+
+- **Old method**: 102+ units per channel query (with Search API)
+- **New method**: 5 units per channel query (with Playlist API)
+
+Example daily usage at 1-minute intervals:
+- Old: 146,880 units/day (14.7x over default quota)
+- New: 7,200 units/day (well within 10,000 quota)
 
 The default quota is 10,000 units per day. Monitor your usage in the Google
 Cloud Console and adjust scrape intervals accordingly.
