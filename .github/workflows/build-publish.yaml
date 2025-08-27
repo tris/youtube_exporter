@@ -45,6 +45,14 @@ jobs:
           path: dist/*
           if-no-files-found: warn
 
+      - name: Notify Pushover
+        if: always()
+        uses: pushover-actions/pushover-action@v1
+        with:
+          token: ${{ secrets.PUSHOVER_API_TOKEN }}
+          user: ${{ secrets.PUSHOVER_USER_KEY }}
+          message: "Job ${{ github.job }} finished with ${{ job.status }}"
+
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -78,3 +86,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Notify Pushover
+        if: always()
+        uses: pushover-actions/pushover-action@v1
+        with:
+          token: ${{ secrets.PUSHOVER_API_TOKEN }}
+          user: ${{ secrets.PUSHOVER_USER_KEY }}
+          message: "Job ${{ github.job }} finished with ${{ job.status }}"
