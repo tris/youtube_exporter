@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -44,6 +45,7 @@ func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 
 			video, err := fetchVideoDetails(reqCtx, ytSvc, videoID)
 			if err != nil {
+				log.Printf("metricsHandler: Failed to fetch details for video %s: %v", videoID, err)
 				http.Error(w, fmt.Sprintf("YouTube API error: %v", err), http.StatusBadGateway)
 				return
 			}
@@ -64,6 +66,7 @@ func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 
 			channel, err := fetchChannelDetails(reqCtx, ytSvc, channelID)
 			if err != nil {
+				log.Printf("metricsHandler: Failed to fetch details for channel %s: %v", channelID, err)
 				http.Error(w, fmt.Sprintf("YouTube API error: %v", err), http.StatusBadGateway)
 				return
 			}
@@ -74,6 +77,7 @@ func metricsHandler(ytSvc *youtube.Service) http.HandlerFunc {
 
 			channelSnap, err := processChannelData(reqCtx, ytSvc, channel, channelID, disableLive)
 			if err != nil {
+				log.Printf("metricsHandler: Failed to process data for channel %s (%s): %v", channelID, channel.Snippet.Title, err)
 				http.Error(w, fmt.Sprintf("YouTube API error processing channel data: %v", err), http.StatusBadGateway)
 				return
 			}

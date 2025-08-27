@@ -24,7 +24,7 @@ func main() {
 	ctx := context.Background()
 	ytSvc, err := newYouTubeService(ctx, apiKey)
 	if err != nil {
-		log.Fatalf("newYouTubeService: %v", err)
+		log.Fatalf("main: Failed to initialize YouTube service: %v", err)
 	}
 
 	// Register HTTP handlers

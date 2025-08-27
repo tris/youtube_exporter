@@ -59,7 +59,7 @@ func (c *LiveStreamCache) UpdateCache(channelID string, liveIDs map[string]struc
 func newYouTubeService(ctx context.Context, apiKey string) (*youtube.Service, error) {
 	ytSvc, err := youtube.NewService(ctx, option.WithAPIKey(apiKey))
 	if err != nil {
-		log.Printf("youtube.NewService: %v", err)
+		log.Printf("newYouTubeService: Failed to create YouTube service client: %v", err)
 		return nil, err
 	}
 	return ytSvc, nil
@@ -73,6 +73,7 @@ func fetchVideoDetails(ctx context.Context, ytSvc *youtube.Service, videoID stri
 
 	resp, err := call.Do()
 	if err != nil {
+		log.Printf("fetchVideoDetails: video %s: %v", videoID, err)
 		return nil, err
 	}
 
@@ -135,6 +136,7 @@ func fetchChannelDetails(ctx context.Context, ytSvc *youtube.Service, channelID 
 
 	resp, err := call.Do()
 	if err != nil {
+		log.Printf("fetchChannelDetails: channel %s: %v", channelID, err)
 		return nil, err
 	}
 
@@ -158,6 +160,7 @@ func fetchChannelLiveStreamsComprehensive(ctx context.Context, ytSvc *youtube.Se
 
 	searchResp, err := searchCall.Context(ctx).Do()
 	if err != nil {
+		log.Printf("fetchChannelLiveStreamsComprehensive (Search API): channel %s: %v", channelID, err)
 		return nil, err
 	}
 
@@ -180,6 +183,7 @@ func fetchChannelLiveStreamsComprehensive(ctx context.Context, ytSvc *youtube.Se
 
 	videosResp, err := videosCall.Do()
 	if err != nil {
+		log.Printf("fetchChannelLiveStreamsComprehensive (Videos API): channel %s: %v", channelID, err)
 		return nil, err
 	}
 
@@ -215,7 +219,7 @@ func fetchAllChannelVideos(ctx context.Context, ytSvc *youtube.Service, channel 
 
 		playlistResp, err := playlistCall.Do()
 		if err != nil {
-			log.Printf("Error fetching playlist items: %v", err)
+			log.Printf("fetchAllChannelVideos (PlaylistItems API): channel %s, page %d: %v", channel.Id, pagesChecked+1, err)
 			break
 		}
 
@@ -256,7 +260,7 @@ func fetchAllChannelVideos(ctx context.Context, ytSvc *youtube.Service, channel 
 
 		videosResp, err := videosCall.Do()
 		if err != nil {
-			log.Printf("Error fetching video details: %v", err)
+			log.Printf("fetchAllChannelVideos (Videos API): channel %s, batch %d-%d: %v", channel.Id, i, end-1, err)
 			continue
 		}
 
@@ -301,7 +305,7 @@ func fetchRecentLiveStreams(ctx context.Context, ytSvc *youtube.Service, channel
 
 		playlistResp, err := playlistCall.Do()
 		if err != nil {
-			log.Printf("Error fetching playlist items: %v", err)
+			log.Printf("fetchRecentLiveStreams (PlaylistItems API): channel %s, page %d: %v", channel.Id, pagesChecked+1, err)
 			break
 		}
 
@@ -340,7 +344,7 @@ func fetchRecentLiveStreams(ctx context.Context, ytSvc *youtube.Service, channel
 
 		videosResp, err := videosCall.Do()
 		if err != nil {
-			log.Printf("Error fetching video details: %v", err)
+			log.Printf("fetchRecentLiveStreams (Videos API): channel %s, batch %d-%d: %v", channel.Id, i, end-1, err)
 			continue
 		}
 
@@ -384,7 +388,7 @@ func refreshCachedVideos(ctx context.Context, ytSvc *youtube.Service, cachedIDs 
 
 		videosResp, err := videosCall.Do()
 		if err != nil {
-			log.Printf("Error refreshing cached videos: %v", err)
+			log.Printf("refreshCachedVideos (Videos API): batch %d-%d: %v", i, end-1, err)
 			continue
 		}
 
@@ -526,7 +530,7 @@ func processChannelData(ctx context.Context, ytSvc *youtube.Service, channel *yo
 	// Pass the channel object which already has contentDetails and disableLive flag
 	liveVideos, err := fetchChannelLiveStreams(ctx, ytSvc, channel, disableLive)
 	if err != nil {
-		log.Printf("Error fetching live streams for channel %s: %v", channelID, err)
+		log.Printf("processChannelData: Failed to fetch live streams for channel %s (%s): %v", channelID, title, err)
 		// Continue without live streams rather than failing completely
 		liveVideos = []*youtube.Video{}
 	}
