@@ -72,7 +72,9 @@ func fetchVideoDetails(ctx context.Context, ytSvc *youtube.Service, videoID stri
 	call.Context(ctx)
 
 	resp, err := call.Do()
+	addQuotaUnits("videos.list", 1)
 	if err != nil {
+		incAPIError("videos.list", err)
 		log.Printf("fetchVideoDetails: video %s: %v", videoID, err)
 		return nil, err
 	}
@@ -135,7 +137,9 @@ func fetchChannelDetails(ctx context.Context, ytSvc *youtube.Service, channelID 
 	call.Context(ctx)
 
 	resp, err := call.Do()
+	addQuotaUnits("channels.list", 1)
 	if err != nil {
+		incAPIError("channels.list", err)
 		log.Printf("fetchChannelDetails: channel %s: %v", channelID, err)
 		return nil, err
 	}
@@ -159,7 +163,9 @@ func fetchChannelLiveStreamsComprehensive(ctx context.Context, ytSvc *youtube.Se
 		MaxResults(50)
 
 	searchResp, err := searchCall.Context(ctx).Do()
+	addQuotaUnits("search.list", 100)
 	if err != nil {
+		incAPIError("search.list", err)
 		log.Printf("fetchChannelLiveStreamsComprehensive (Search API): channel %s: %v", channelID, err)
 		return nil, err
 	}
@@ -182,7 +188,9 @@ func fetchChannelLiveStreamsComprehensive(ctx context.Context, ytSvc *youtube.Se
 	videosCall.Context(ctx)
 
 	videosResp, err := videosCall.Do()
+	addQuotaUnits("videos.list", 1)
 	if err != nil {
+		incAPIError("videos.list", err)
 		log.Printf("fetchChannelLiveStreamsComprehensive (Videos API): channel %s: %v", channelID, err)
 		return nil, err
 	}
@@ -218,7 +226,9 @@ func fetchAllChannelVideos(ctx context.Context, ytSvc *youtube.Service, channel 
 		playlistCall.Context(ctx)
 
 		playlistResp, err := playlistCall.Do()
+		addQuotaUnits("playlistItems.list", 1)
 		if err != nil {
+			incAPIError("playlistItems.list", err)
 			log.Printf("fetchAllChannelVideos (PlaylistItems API): channel %s, page %d: %v", channel.Id, pagesChecked+1, err)
 			break
 		}
@@ -259,7 +269,9 @@ func fetchAllChannelVideos(ctx context.Context, ytSvc *youtube.Service, channel 
 		videosCall.Context(ctx)
 
 		videosResp, err := videosCall.Do()
+		addQuotaUnits("videos.list", 1)
 		if err != nil {
+			incAPIError("videos.list", err)
 			log.Printf("fetchAllChannelVideos (Videos API): channel %s, batch %d-%d: %v", channel.Id, i, end-1, err)
 			continue
 		}
@@ -304,7 +316,9 @@ func fetchRecentLiveStreams(ctx context.Context, ytSvc *youtube.Service, channel
 		playlistCall.Context(ctx)
 
 		playlistResp, err := playlistCall.Do()
+		addQuotaUnits("playlistItems.list", 1)
 		if err != nil {
+			incAPIError("playlistItems.list", err)
 			log.Printf("fetchRecentLiveStreams (PlaylistItems API): channel %s, page %d: %v", channel.Id, pagesChecked+1, err)
 			break
 		}
@@ -343,7 +357,9 @@ func fetchRecentLiveStreams(ctx context.Context, ytSvc *youtube.Service, channel
 		videosCall.Context(ctx)
 
 		videosResp, err := videosCall.Do()
+		addQuotaUnits("videos.list", 1)
 		if err != nil {
+			incAPIError("videos.list", err)
 			log.Printf("fetchRecentLiveStreams (Videos API): channel %s, batch %d-%d: %v", channel.Id, i, end-1, err)
 			continue
 		}
@@ -387,7 +403,9 @@ func refreshCachedVideos(ctx context.Context, ytSvc *youtube.Service, cachedIDs 
 		videosCall.Context(ctx)
 
 		videosResp, err := videosCall.Do()
+		addQuotaUnits("videos.list", 1)
 		if err != nil {
+			incAPIError("videos.list", err)
 			log.Printf("refreshCachedVideos (Videos API): batch %d-%d: %v", i, end-1, err)
 			continue
 		}

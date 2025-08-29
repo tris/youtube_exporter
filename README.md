@@ -95,6 +95,20 @@ Additionally, when querying a channel, the exporter will automatically
 discover and include metrics for all currently live streams from that channel
 using the same video metrics listed above.
 
+### Exporter metrics
+
+Exposed on `/metrics` (global, cumulative):
+
+- `youtube_api_quota_units_total` - Estimated YouTube Data API quota units
+  consumed, labeled by `endpoint`.
+- `youtube_api_errors_total` - Count of YouTube Data API request errors,
+  labeled by `endpoint` and HTTP `code`.
+
+Notes:
+- Quota units are estimated using official per-endpoint costs: `videos.list`=1,
+  `channels.list`=1, `playlistItems.list`=1, `search.list`=100.
+- Units are counted per API request attempt, regardless of success.
+
 ## Example Prometheus config
 
 ```yaml
