@@ -47,11 +47,13 @@ jobs:
 
       - name: Notify Pushover
         if: always()
-        uses: pushover-actions/pushover-action@v1
+        uses: umahmood/pushover-actions@main
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER_KEY }}
         with:
-          token: ${{ secrets.PUSHOVER_API_TOKEN }}
-          user: ${{ secrets.PUSHOVER_USER_KEY }}
-          message: "Job ${{ github.job }} finished with ${{ job.status }}"
+          status: ${{ job.status }}
+          title: "youtube_exporter goreleaser"
 
   docker:
     runs-on: ubuntu-latest
@@ -89,8 +91,10 @@ jobs:
 
       - name: Notify Pushover
         if: always()
-        uses: pushover-actions/pushover-action@v1
+        uses: umahmood/pushover-actions@main
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER_KEY }}
         with:
-          token: ${{ secrets.PUSHOVER_API_TOKEN }}
-          user: ${{ secrets.PUSHOVER_USER_KEY }}
-          message: "Job ${{ github.job }} finished with ${{ job.status }}"
+          status: ${{ job.status }}
+          title: "youtube_exporter docker"
