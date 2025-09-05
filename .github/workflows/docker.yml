@@ -1,9 +1,13 @@
-name: Build and Push Docker Image
+name: Build and push Docker image
 
 on:
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write
+  packages: write
 
 jobs:
   build-and-push:
