@@ -12,7 +12,7 @@ from config import MAX_VIDEO_HEIGHT, DEFAULT_FRAME_SKIP
 logger = logging.getLogger(__name__)
 
 
-def calculate_intra_entropy(image):
+def calculate_spatial_entropy(image):
     """Calculate Shannon entropy of pixel intensities."""
     # Convert to grayscale
     gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
@@ -24,7 +24,7 @@ def calculate_intra_entropy(image):
     return entropy
 
 
-def calculate_inter_entropy(current_image, previous_image):
+def calculate_temporal_entropy(current_image, previous_image):
     """Calculate entropy of the difference between frames."""
     if previous_image is None:
         return 0.0

@@ -10,8 +10,8 @@ A Prometheus exporter that monitors YouTube videos and live streams for entropy 
 - **Smart Data Reuse**: Caches high-resolution frames between entropy and object detection to minimize bandwidth usage
 
 ### Entropy Calculation
-- **Intra-image entropy**: Shannon entropy of pixel intensities within frames (0-8 bits range)
-- **Inter-image entropy**: Entropy of differences between frames separated by ~1 second (0-8 bits range)
+- **Spatial entropy**: Shannon entropy of pixel intensities within frames (0-8 bits range)
+- **Temporal entropy**: Entropy of differences between frames separated by ~1 second (0-8 bits range)
 - **High-resolution analysis**: Uses maximum available resolution for more accurate entropy measurements
 
 ### Bitrate Measurement
@@ -36,8 +36,8 @@ A Prometheus exporter that monitors YouTube videos and live streams for entropy 
 ## Metrics
 
 ### Entropy Metrics
-- `youtube_video_intra_entropy{video_id="...", title="..."}`: Shannon entropy of pixel intensities within a single frame (0-8 bits range) - calculated from maximum resolution frames
-- `youtube_video_inter_entropy{video_id="...", title="..."}`: Shannon entropy of pixel differences between frames separated by ~1 second (0-8 bits range) - uses high-resolution frame analysis
+- `youtube_video_spatial_entropy{video_id="...", title="..."}`: Shannon entropy of pixel intensities within a single frame (0-8 bits range) - calculated from maximum resolution frames
+- `youtube_video_temporal_entropy{video_id="...", title="..."}`: Shannon entropy of pixel differences between frames separated by ~1 second (0-8 bits range) - uses high-resolution frame analysis
 - `youtube_video_bitrate{video_id="...", title="...", resolution="..."}`: **Measured** bitrate of the video stream in bits per second from actual video segment downloads (not format metadata)
 
 ### Object Detection Metrics

@@ -11,7 +11,7 @@ from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from prometheus_client.registry import Collector
 from quota import api_quota_used, api_quota_total
 from youtube_client import fetch_video_details, fetch_channel_details, fetch_channel_live_streams
-from entropy import fetch_two_spaced_frames, calculate_intra_entropy, calculate_inter_entropy, count_objects_in_video
+from entropy import fetch_two_spaced_frames, calculate_spatial_entropy, calculate_temporal_entropy, count_objects_in_video
 from api_errors import api_errors
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 metrics_data = {}  # Key: video_id, Value: metrics dict
 channel_metrics_data = {}  # Key: channel_id, Value: channel metrics dict
 # Separate storage for entropy values that can be updated asynchronously
-entropy_data = {}  # Key: video_id, Value: {'intra_entropy': float, 'inter_entropy': float, 'timestamp': float}
+entropy_data = {}  # Key: video_id, Value: {'spatial_entropy': float, 'temporal_entropy': float, 'timestamp': float}
 # Separate storage for object detection results
 object_data = {}  # Key: f"{video_id}_{object_type}", Value: {'object_count': int, 'object_type': str, 'timestamp': float}
 # Track active object detection tasks to prevent duplicates
@@ -40,13 +40,13 @@ class TimestampedMetricsCollector(Collector):
         # Always create metric families, regardless of data availability
 
         # Entropy metrics
-        intra_family = GaugeMetricFamily(
-            'youtube_video_intra_entropy',
+        spatial_family = GaugeMetricFamily(
+            'youtube_video_spatial_entropy',
             'Shannon entropy of pixel intensities within a single frame (bits, 0-8 range)',
             labels=['video_id', 'title']
         )
-        inter_family = GaugeMetricFamily(
-            'youtube_video_inter_entropy',
+        temporal_family = GaugeMetricFamily(
+            'youtube_video_temporal_entropy',
             'Shannon entropy of pixel differences between frames separated by ~1 second (bits, 0-8 range)',
             labels=['video_id', 'title']
         )
@@ -170,16 +170,16 @@ class TimestampedMetricsCollector(Collector):
                 if video_id in entropy_data:
                     entropy_info = entropy_data[video_id]
                     entropy_timestamp = entropy_info.get('timestamp', data['timestamp'])
-                    if 'intra_entropy' in entropy_info:
-                        intra_family.add_metric(
+                    if 'spatial_entropy' in entropy_info:
+                        spatial_family.add_metric(
                             [video_id, title],
-                            entropy_info['intra_entropy'],
+                            entropy_info['spatial_entropy'],
                             timestamp=entropy_timestamp
                         )
-                    if 'inter_entropy' in entropy_info:
-                        inter_family.add_metric(
+                    if 'temporal_entropy' in entropy_info:
+                        temporal_family.add_metric(
                             [video_id, title],
-                            entropy_info['inter_entropy'],
+                            entropy_info['temporal_entropy'],
                             timestamp=entropy_timestamp
                         )
                     if 'bitrate' in entropy_info and entropy_info['bitrate'] is not None:
@@ -188,18 +188,18 @@ class TimestampedMetricsCollector(Collector):
                             entropy_info['bitrate'],
                             timestamp=entropy_timestamp
                         )
-                elif 'intra_entropy' in data or 'inter_entropy' in data:
+                elif 'spatial_entropy' in data or 'temporal_entropy' in data:
                     # Backward compatibility: check metrics_data
-                    if 'intra_entropy' in data:
-                        intra_family.add_metric(
+                    if 'spatial_entropy' in data:
+                        spatial_family.add_metric(
                             [video_id, title],
-                            data['intra_entropy'],
+                            data['spatial_entropy'],
                             timestamp=data['timestamp']
                         )
-                    if 'inter_entropy' in data:
-                        inter_family.add_metric(
+                    if 'temporal_entropy' in data:
+                        temporal_family.add_metric(
                             [video_id, title],
-                            data['inter_entropy'],
+                            data['temporal_entropy'],
                             timestamp=data['timestamp']
                         )
 
@@ -246,7 +246,7 @@ class TimestampedMetricsCollector(Collector):
                         has_entropy = stream_video_id in entropy_data
                         if has_entropy:
                             entropy_info = entropy_data[stream_video_id]
-                            logger.info(f"Found entropy data for {stream_video_id}: intra={entropy_info.get('intra_entropy', 0):.2f}, inter={entropy_info.get('inter_entropy', 0):.2f}")
+                            logger.info(f"Found entropy data for {stream_video_id}: spatial={entropy_info.get('spatial_entropy', 0):.2f}, temporal={entropy_info.get('temporal_entropy', 0):.2f}")
                         else:
                             logger.debug(f"No entropy data yet for {stream_video_id}")
 
@@ -259,12 +259,12 @@ class TimestampedMetricsCollector(Collector):
                         if stream_video_id in entropy_data:
                             entropy_info = entropy_data[stream_video_id]
                             entropy_timestamp = entropy_info.get('timestamp', channel_data['timestamp'])
-                            if 'intra_entropy' in entropy_info:
-                                logger.info(f"Adding intra_entropy metric for {stream_video_id}: {entropy_info['intra_entropy']}")
-                                intra_family.add_metric(stream_labels, entropy_info['intra_entropy'], timestamp=entropy_timestamp)
-                            if 'inter_entropy' in entropy_info:
-                                logger.info(f"Adding inter_entropy metric for {stream_video_id}: {entropy_info['inter_entropy']}")
-                                inter_family.add_metric(stream_labels, entropy_info['inter_entropy'], timestamp=entropy_timestamp)
+                            if 'spatial_entropy' in entropy_info:
+                                logger.info(f"Adding spatial_entropy metric for {stream_video_id}: {entropy_info['spatial_entropy']}")
+                                spatial_family.add_metric(stream_labels, entropy_info['spatial_entropy'], timestamp=entropy_timestamp)
+                            if 'temporal_entropy' in entropy_info:
+                                logger.info(f"Adding temporal_entropy metric for {stream_video_id}: {entropy_info['temporal_entropy']}")
+                                temporal_family.add_metric(stream_labels, entropy_info['temporal_entropy'], timestamp=entropy_timestamp)
                             if 'bitrate' in entropy_info and entropy_info['bitrate'] is not None:
                                 logger.info(f"Adding bitrate metric for {stream_video_id}: {entropy_info['bitrate']}")
                                 bitrate_family.add_metric([stream_video_id, stream['title'], entropy_info.get('resolution', 'unknown')], entropy_info['bitrate'], timestamp=entropy_timestamp)
@@ -307,8 +307,8 @@ class TimestampedMetricsCollector(Collector):
             logger.warning(f"Failed to collect process metrics: {e}")
 
         # Always yield all metric families
-        yield intra_family
-        yield inter_family
+        yield spatial_family
+        yield temporal_family
         yield bitrate_family
         yield object_count_family
         yield view_family
@@ -390,14 +390,14 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
         frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(url, max_height=max_height)
 
         if frame1 is not None and frame2 is not None:
-            # Calculate intra-entropy using the second frame
-            intra_entropy = calculate_intra_entropy(frame2)
-            # Calculate inter-entropy between the two spaced frames
-            inter_entropy = calculate_inter_entropy(frame2, frame1)
+            # Calculate spatial-entropy using the second frame
+            spatial_entropy = calculate_spatial_entropy(frame2)
+            # Calculate temporal-entropy between the two spaced frames
+            temporal_entropy = calculate_temporal_entropy(frame2, frame1)
 
             entropy_data[video_id] = {
-                'intra_entropy': intra_entropy,
-                'inter_entropy': inter_entropy,
+                'spatial_entropy': spatial_entropy,
+                'temporal_entropy': temporal_entropy,
                 'bitrate': bitrate,
                 'resolution': resolution,
                 'timestamp': time.time(),
@@ -405,8 +405,8 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
             }
 
             bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
-            logger.info(f"Stored entropy for {video_id}: intra={intra_entropy:.2f}, inter={inter_entropy:.2f}, bitrate={bitrate_str} bps, resolution={resolution}")
-            return intra_entropy, inter_entropy, bitrate, resolution, frame2
+            logger.info(f"Stored entropy for {video_id}: spatial={spatial_entropy:.2f}, temporal={temporal_entropy:.2f}, bitrate={bitrate_str} bps, resolution={resolution}")
+            return spatial_entropy, temporal_entropy, bitrate, resolution, frame2
         else:
             logger.warning(f"Failed to fetch frames for {video_id}")
             return None, None, None, None, None
@@ -660,8 +660,8 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             if age < 300:  # Skip if entropy was computed in last 5 minutes
                 logger.debug(f"Using existing entropy data for {video_id}, data is {age:.0f}s old")
                 # Copy entropy data to metrics_data for backward compatibility
-                metrics_data[video_id]['intra_entropy'] = entropy_data[video_id].get('intra_entropy', 0.0)
-                metrics_data[video_id]['inter_entropy'] = entropy_data[video_id].get('inter_entropy', 0.0)
+                metrics_data[video_id]['spatial_entropy'] = entropy_data[video_id].get('spatial_entropy', 0.0)
+                metrics_data[video_id]['temporal_entropy'] = entropy_data[video_id].get('temporal_entropy', 0.0)
             else:
                 # Check if entropy computation is already in progress
                 if video_id in active_entropy_computation:
