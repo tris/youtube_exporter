@@ -9,7 +9,7 @@ import threading
 from prometheus_client import generate_latest, CollectorRegistry
 from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from prometheus_client.registry import Collector
-from quota import api_quota_used, api_quota_total
+import quota
 from youtube_client import fetch_video_details, fetch_channel_details, fetch_channel_live_streams
 from entropy import fetch_two_spaced_frames, calculate_spatial_entropy, calculate_temporal_entropy, count_objects_in_video
 from api_errors import api_errors
@@ -284,10 +284,10 @@ class TimestampedMetricsCollector(Collector):
                         live_status_family.add_metric(live_status_labels, 1, timestamp=channel_data['timestamp'])
 
         # Process quota metrics
-        for endpoint, units in api_quota_used.items():
+        for endpoint, units in quota.api_quota_used.items():
             quota_family.add_metric([endpoint], units)
 
-        for endpoint, units in api_quota_total.items():
+        for endpoint, units in quota.api_quota_total.items():
             quota_total_family.add_metric([endpoint], units)
 
         # Process API errors metrics
