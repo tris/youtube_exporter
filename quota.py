@@ -1,7 +1,8 @@
 """Quota tracking module for YouTube Data API usage."""
 
-import time
 import logging
+import time
+
 from config import QUOTA_COSTS
 
 logger = logging.getLogger(__name__)
@@ -15,20 +16,22 @@ quota_last_reset = None
 def add_quota_units(endpoint, units=None):
     """Add quota units used for an endpoint."""
     global api_quota_used, api_quota_total
-    
+
     # Use predefined cost if units not specified
     if units is None:
         units = QUOTA_COSTS.get(endpoint, 1)
-    
+
     if endpoint not in api_quota_used:
         api_quota_used[endpoint] = 0
     api_quota_used[endpoint] += units
-    
+
     if endpoint not in api_quota_total:
         api_quota_total[endpoint] = 0
     api_quota_total[endpoint] += units
-    
-    logger.debug(f"Added {units} quota units for {endpoint}, total today: {api_quota_used[endpoint]}, total ever: {api_quota_total[endpoint]}")
+
+    logger.debug(
+        f"Added {units} quota units for {endpoint}, total today: {api_quota_used[endpoint]}, total ever: {api_quota_total[endpoint]}"
+    )
 
 
 def reset_quota_usage():
@@ -62,9 +65,9 @@ def check_quota_reset():
 def get_quota_usage():
     """Get current quota usage statistics."""
     return {
-        'today': api_quota_used.copy(),
-        'total': api_quota_total.copy(),
-        'last_reset': quota_last_reset
+        "today": api_quota_used.copy(),
+        "total": api_quota_total.copy(),
+        "last_reset": quota_last_reset,
     }
 
 

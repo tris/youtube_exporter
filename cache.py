@@ -1,14 +1,14 @@
 """Cache management module for live stream data."""
 
-import time
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 
 class ChannelLiveCache:
     """Cache for a single channel's live stream data."""
-    
+
     def __init__(self):
         self.initialized = False
         self.cached_live_ids = set()  # Set of video IDs
@@ -17,7 +17,7 @@ class ChannelLiveCache:
 
 class LiveStreamCache:
     """Global cache manager for live stream data."""
-    
+
     def __init__(self):
         self.cache = {}  # channel_id -> ChannelLiveCache
 
@@ -33,12 +33,18 @@ class LiveStreamCache:
         channel_cache.cached_live_ids = set(live_ids) if live_ids else set()
         channel_cache.last_updated = time.time()
         channel_cache.initialized = True
-        logger.debug(f"Updated cache for channel {channel_id} with {len(channel_cache.cached_live_ids)} live streams")
+        logger.debug(
+            f"Updated cache for channel {channel_id} with {len(channel_cache.cached_live_ids)} live streams"
+        )
 
     def get_cached_live_ids(self, channel_id):
         """Get cached live stream IDs for a channel."""
         channel_cache = self.get_channel_cache(channel_id)
-        return channel_cache.cached_live_ids.copy() if channel_cache.initialized else set()
+        return (
+            channel_cache.cached_live_ids.copy()
+            if channel_cache.initialized
+            else set()
+        )
 
     def is_cache_initialized(self, channel_id):
         """Check if cache is initialized for a channel."""
@@ -65,24 +71,26 @@ class LiveStreamCache:
     def get_cache_stats(self):
         """Get statistics about the cache."""
         stats = {
-            'total_channels': len(self.cache),
-            'initialized_channels': 0,
-            'total_cached_streams': 0,
-            'channels': {}
+            "total_channels": len(self.cache),
+            "initialized_channels": 0,
+            "total_cached_streams": 0,
+            "channels": {},
         }
-        
+
         for channel_id, channel_cache in self.cache.items():
             if channel_cache.initialized:
-                stats['initialized_channels'] += 1
-                stats['total_cached_streams'] += len(channel_cache.cached_live_ids)
-            
-            stats['channels'][channel_id] = {
-                'initialized': channel_cache.initialized,
-                'live_streams': len(channel_cache.cached_live_ids),
-                'last_updated': channel_cache.last_updated,
-                'age_seconds': self.get_cache_age(channel_id)
+                stats["initialized_channels"] += 1
+                stats["total_cached_streams"] += len(
+                    channel_cache.cached_live_ids
+                )
+
+            stats["channels"][channel_id] = {
+                "initialized": channel_cache.initialized,
+                "live_streams": len(channel_cache.cached_live_ids),
+                "last_updated": channel_cache.last_updated,
+                "age_seconds": self.get_cache_age(channel_id),
             }
-        
+
         return stats
 
 

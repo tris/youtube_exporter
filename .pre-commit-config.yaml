@@ -1,0 +1,30 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: trailing-whitespace
+    types: [text]
+  - id: end-of-file-fixer
+    types: [text]
+  - id: check-added-large-files
+  - id: check-merge-conflict
+  - id: check-yaml
+- repo: https://github.com/psf/black
+  rev: 24.8.0
+  hooks:
+  - id: black
+    args: [--line-length=79]
+- repo: https://github.com/PyCQA/autoflake
+  rev: v2.3.1
+  hooks:
+  - id: autoflake
+    args: [--remove-all-unused-imports, --remove-unused-variables]
+- repo: https://github.com/PyCQA/isort
+  rev: 6.0.1
+  hooks:
+  - id: isort
+    args: [--profile=black]
+- repo: https://github.com/PyCQA/flake8
+  rev: 7.1.1
+  hooks:
+  - id: flake8

@@ -10,3 +10,8 @@ google-auth>=2.0.0
 transformers>=4.21.0
 m3u8>=3.0.0
 torch>=1.12.0
+pre-commit
+black
+isort
+flake8
+autoflake
