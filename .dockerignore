@@ -4,8 +4,11 @@
 
 README.md
 *.md
+LICENSE
 
-__pycache__
-*.pyc
-*.pyo
-*.pyd
+__pycache__/
+*.py[cod]
+
+Dockerfile*
+docker-compose*.yml
+.dockerignore
