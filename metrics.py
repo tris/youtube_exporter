@@ -46,7 +46,7 @@ class TimestampedMetricsCollector(Collector):
         bitrate_family = GaugeMetricFamily(
             'youtube_video_bitrate',
             'Bitrate of the video stream in bits per second, calculated from 1-second download',
-            labels=['video_id', 'title']
+            labels=['video_id', 'title', 'resolution']
         )
 
         # YouTube API metrics
@@ -159,7 +159,7 @@ class TimestampedMetricsCollector(Collector):
                         )
                     if 'bitrate' in entropy_info and entropy_info['bitrate'] is not None:
                         bitrate_family.add_metric(
-                            [video_id, title],
+                            [video_id, title, entropy_info.get('resolution', 'unknown')],
                             entropy_info['bitrate'],
                             timestamp=entropy_timestamp
                         )
@@ -236,7 +236,7 @@ class TimestampedMetricsCollector(Collector):
                                 inter_family.add_metric(stream_labels, entropy_info['inter_entropy'], timestamp=entropy_timestamp)
                             if 'bitrate' in entropy_info and entropy_info['bitrate'] is not None:
                                 logger.info(f"Adding bitrate metric for {stream_video_id}: {entropy_info['bitrate']}")
-                                bitrate_family.add_metric(stream_labels, entropy_info['bitrate'], timestamp=entropy_timestamp)
+                                bitrate_family.add_metric([stream_video_id, stream['title'], entropy_info.get('resolution', 'unknown')], entropy_info['bitrate'], timestamp=entropy_timestamp)
 
                         # Live status infometric
                         live_status_labels = [stream_video_id, stream['title'], stream.get('live_broadcast_state', 'none')]
@@ -342,7 +342,7 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
     
     logger.info(f"Computing entropy for video {video_id}")
     url = f"https://www.youtube.com/watch?v={video_id}"
-    frame1, frame2, bitrate = fetch_two_spaced_frames(url, max_height=max_height)
+    frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(url, max_height=max_height)
     
     if frame1 is not None and frame2 is not None:
         # Calculate intra-entropy using the second frame
@@ -354,12 +354,13 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
             'intra_entropy': intra_entropy,
             'inter_entropy': inter_entropy,
             'bitrate': bitrate,
+            'resolution': resolution,
             'timestamp': time.time()
         }
         
         bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
-        logger.info(f"Stored entropy for {video_id}: intra={intra_entropy:.2f}, inter={inter_entropy:.2f}, bitrate={bitrate_str} bps")
-        return intra_entropy, inter_entropy, bitrate
+        logger.info(f"Stored entropy for {video_id}: intra={intra_entropy:.2f}, inter={inter_entropy:.2f}, bitrate={bitrate_str} bps, resolution={resolution}")
+        return intra_entropy, inter_entropy, bitrate, resolution
     else:
         logger.warning(f"Failed to fetch frames for {video_id}")
         return None, None, None
@@ -529,7 +530,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None):
                 return
         
         # Compute entropy synchronously for individual video requests
-        intra_entropy, inter_entropy, bitrate = compute_and_store_entropy(video_id, api_data.get('title'), max_height)
+        intra_entropy, inter_entropy, bitrate, resolution = compute_and_store_entropy(video_id, api_data.get('title'), max_height)
         
         if intra_entropy is not None and inter_entropy is not None:
             # Also store in metrics_data for backward compatibility
