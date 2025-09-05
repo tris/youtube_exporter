@@ -1,6 +1,6 @@
-# YouTube Entropy Exporter
+# youtube_exporter
 
-A high-performance Prometheus exporter that monitors YouTube videos and live streams for entropy metrics and metadata to detect when streams go "dark" or get stuck. Features maximum resolution analysis, intelligent data reuse, and measured bitrate calculation.
+A Prometheus exporter that monitors YouTube videos and live streams for entropy metrics and metadata to detect when streams go "dark" or get stuck. Also includes stream bitrate estimation and object detection.
 
 ## Features
 
@@ -277,7 +277,7 @@ Monitor entire YouTube channels and their live streams:
 Monitor videos with object detection (e.g., count people in streams):
 
 ```yaml
-- job_name: 'youtube_object_detection'
+- job_name: 'youtube_objects'
   scrape_interval: 5m
   static_configs:
   - targets:
