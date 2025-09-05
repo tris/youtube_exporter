@@ -1,8 +1,17 @@
-FROM python:3.9-slim
+FROM python:3.13-slim
 
-# Only install libgomp1 which is needed for OpenMP support in numpy/opencv
+# Install system dependencies needed for video processing and AI
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     libgomp1 \
+    libgl1-mesa-dri \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libfontconfig1 \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

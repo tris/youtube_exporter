@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
+import os
 import logging
 from config import FLASK_HOST, FLASK_PORT, validate_config
 from routes import get_flask_app
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+logging.basicConfig(level=getattr(logging, log_level), format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def main():

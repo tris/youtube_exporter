@@ -1,28 +1,47 @@
-# YouTube Exporter
+# YouTube Entropy Exporter
 
-A comprehensive Prometheus exporter that monitors YouTube videos and live streams for entropy metrics and metadata to detect when streams go "dark" or get stuck.
+A high-performance Prometheus exporter that monitors YouTube videos and live streams for entropy metrics and metadata to detect when streams go "dark" or get stuck. Features maximum resolution analysis, intelligent data reuse, and measured bitrate calculation.
 
 ## Features
 
-- **Video Analysis**: Fetches frames from YouTube live streams and videos using yt-dlp
-- **Entropy Calculation**:
-  - Intra-image entropy (Shannon entropy of pixel intensities within frames)
-  - Inter-image entropy (entropy of differences between frames separated by ~1 second)
-- **Bitrate Measurement**: Real-time bitrate calculation from actual 1-second downloads using yt-dlp's HTTP client
+### Video Analysis & Quality
+- **Maximum Resolution Processing**: Automatically selects highest available quality (up to 8K/4320p) for optimal analysis
+- **Advanced Frame Capture**: Fetches frames from YouTube live streams and videos using yt-dlp with intelligent manifest detection
+- **Smart Data Reuse**: Caches high-resolution frames between entropy and object detection to minimize bandwidth usage
+
+### Entropy Calculation
+- **Intra-image entropy**: Shannon entropy of pixel intensities within frames (0-8 bits range)
+- **Inter-image entropy**: Entropy of differences between frames separated by ~1 second (0-8 bits range)
+- **High-resolution analysis**: Uses maximum available resolution for more accurate entropy measurements
+
+### Bitrate Measurement
+- **Measured Bitrates**: Real-time bitrate calculation from actual video segment downloads (not format metadata)
+- **HLS/DASH Support**: Parses manifests and downloads actual video segments for accurate live stream measurements
+- **Intelligent Detection**: Automatically detects manifest vs. direct streams and applies appropriate measurement strategy
+
+### Performance & Reliability
+- **Asynchronous Processing**: Non-blocking API responses with background video processing
+- **Race Condition Prevention**: Thread-safe duplicate computation prevention for efficient resource usage
+- **Smart Caching**: 5-minute frame cache with automatic expiration and reuse logic
+- **Early Manifest Detection**: Avoids unnecessary frame capture from playlist files
+
+### Integration & Monitoring
 - **YouTube API Integration**: Fetches comprehensive metadata (views, likes, concurrent viewers, live status, channel info)
 - **Channel Monitoring**: Support for monitoring entire channels and their live streams
+- **Object Detection**: Optional AI-powered object counting with frame reuse optimization
 - **Prometheus Export**: Exposes all metrics via HTTP endpoint for Prometheus scraping with proper timestamps
-- **Background Processing**: Asynchronous entropy computation for channel live streams to avoid blocking
-- **Resource Management**: Optional image fetching, configurable intervals, quota tracking, error monitoring
-- **Process Monitoring**: Built-in CPU, memory, and system metrics
+- **Resource Management**: Built-in quota tracking, error monitoring, and process metrics
 - **Validation**: Video ID and channel ID validation with proper error handling
 
 ## Metrics
 
 ### Entropy Metrics
-- `youtube_video_intra_entropy{video_id="...", title="..."}`: Shannon entropy of pixel intensities within a single frame (0-8 bits range)
-- `youtube_video_inter_entropy{video_id="...", title="..."}`: Shannon entropy of pixel differences between frames separated by ~1 second (0-8 bits range)
-- `youtube_video_bitrate{video_id="...", title="..."}`: Bitrate of the video stream in bits per second, calculated from 1-second download
+- `youtube_video_intra_entropy{video_id="...", title="..."}`: Shannon entropy of pixel intensities within a single frame (0-8 bits range) - calculated from maximum resolution frames
+- `youtube_video_inter_entropy{video_id="...", title="..."}`: Shannon entropy of pixel differences between frames separated by ~1 second (0-8 bits range) - uses high-resolution frame analysis
+- `youtube_video_bitrate{video_id="...", title="...", resolution="..."}`: **Measured** bitrate of the video stream in bits per second from actual video segment downloads (not format metadata)
+
+### Object Detection Metrics
+- `youtube_video_object_count{video_id="...", title="...", object_type="..."}`: Number of detected objects of specified type in high-resolution video frames using AI object detection
 
 ### YouTube API Metrics
 - `youtube_video_view_count{video_id="...", title="..."}`: Total view count reported by YouTube
@@ -80,6 +99,8 @@ A comprehensive Prometheus exporter that monitors YouTube videos and live stream
 ### Video Metrics
 - `video_id` (required for video metrics): YouTube video ID (11 characters)
 - `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
+- `max_height` (optional): Maximum video height in pixels (default: 4320 for up to 8K resolution)
+- `match` (optional): Object type to detect and count (e.g., "person", "car", "dog") - enables AI object detection
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
 
 ### Channel Metrics
@@ -88,12 +109,23 @@ A comprehensive Prometheus exporter that monitors YouTube videos and live stream
 - `disable_live` (optional): Disable live stream detection for channels (default: false)
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
 
+### Performance Notes
+- **Asynchronous Processing**: First request returns immediately with YouTube API data; entropy metrics appear in subsequent requests after background processing completes
+- **Smart Caching**: Entropy data is cached for 5 minutes to avoid redundant processing
+- **Frame Reuse**: High-resolution frames are automatically reused between entropy calculation and object detection when both are requested
+- **Race Condition Prevention**: Multiple simultaneous requests for the same video are automatically deduplicated
+
 ## Examples
 
 ### Video Metrics
-Basic usage:
+Basic usage (maximum resolution entropy + measured bitrate):
 ```
 http://localhost:9473/metrics?video_id=yv2RtoIMNzA
+```
+
+With AI object detection:
+```
+http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=person
 ```
 
 Disable image fetching (API data only):
@@ -101,13 +133,18 @@ Disable image fetching (API data only):
 http://localhost:9473/metrics?video_id=yv2RtoIMNzA&fetch_images=false
 ```
 
-Custom interval (30 seconds):
+Custom resolution limit (1080p max):
 ```
-http://localhost:9473/metrics?video_id=yv2RtoIMNzA&interval=30
+http://localhost:9473/metrics?video_id=yv2RtoIMNzA&max_height=1080
+```
+
+Multiple features combined:
+```
+http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=car&interval=30
 ```
 
 ### Channel Metrics
-Basic channel usage:
+Basic channel usage (monitors all live streams):
 ```
 http://localhost:9473/metrics?channel=UC029bcZGqxOsRkvWrZLhgKQ
 ```
@@ -117,26 +154,171 @@ Channel without live stream detection:
 http://localhost:9473/metrics?channel=UC029bcZGqxOsRkvWrZLhgKQ&disable_live=true
 ```
 
+### Performance Examples
+First request (immediate response with API data):
+```bash
+curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
+# Returns immediately with YouTube API metrics
+# Background processing starts for entropy calculation
+```
+
+Second request (includes entropy metrics):
+```bash
+curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
+# Returns API metrics + entropy metrics from background processing
+# Uses cached high-resolution frames if object detection is also requested
+```
+
 ## Configuration
 
-- Port: 9473 (configurable via PORT environment variable)
-- YouTube API Key: Required via YOUTUBE_API_KEY environment variable
-- Default fetch interval: 5 minutes
-- Minimum fetch interval: 30 seconds
+### Environment Variables
+- `YOUTUBE_API_KEY` (required): YouTube Data API v3 key
+- `PORT` (optional): Server port (default: 9473)
+- `LOG_LEVEL` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
+
+### Performance Settings
+- **Maximum Resolution**: Up to 8K (4320p) - configurable via `max_height` parameter
+- **Default fetch interval**: 5 minutes (300 seconds)
+- **Minimum fetch interval**: 30 seconds
+- **Cache duration**: 5 minutes for entropy data and high-resolution frames
+- **Background processing**: Automatic for all video analysis to ensure non-blocking API responses
+
+### Quality & Accuracy
+- **Bitrate measurement**: Always measured from actual video segment downloads, never from format metadata
+- **Entropy calculation**: Uses maximum available resolution for highest accuracy
+- **Frame reuse**: Intelligent caching between entropy and object detection operations
+- **Manifest detection**: Automatic detection and parsing of HLS/DASH streams
 
 ## Deployment
 
+### Basic Deployment
+```bash
+export YOUTUBE_API_KEY="your_api_key_here"
+export LOG_LEVEL="INFO"
+python main.py
+```
+
+### Docker Deployment
 Run as a service or container. Ensure yt-dlp dependencies (ffmpeg, etc.) are installed.
+
+### Production Considerations
+- **Memory usage**: High-resolution frame caching requires adequate RAM
+- **Network bandwidth**: Measured bitrate calculation downloads video segments
+- **CPU usage**: AI object detection and entropy calculation are CPU-intensive
+- **API quotas**: Monitor YouTube API quota usage via built-in metrics
 
 ## Requirements
 
-- Python 3.8+
+### Core Dependencies
+- Python 3.11+
 - YouTube Data API v3 key
-- yt-dlp
+- yt-dlp (with ffmpeg support)
 - prometheus-client
-- Pillow
+- Pillow (PIL)
 - numpy
-- opencv-python
+- opencv-python-headless
 - flask
 - google-api-python-client
 - google-auth
+
+### AI/ML Dependencies (for object detection)
+- transformers
+- torch
+- m3u8 (for HLS manifest parsing)
+
+### System Dependencies
+- ffmpeg (required by yt-dlp for video processing)
+- libgl1-mesa-glx (for OpenCV on some Linux distributions)
+
+## Prometheus Configuration
+
+### Basic Video Monitoring
+Monitor specific YouTube videos with entropy and bitrate metrics:
+
+```yaml
+- job_name: 'youtube'
+  scrape_interval: 5m
+  static_configs:
+  - targets:
+    - oefos36Y_Mo
+    - vZEINdmawdc
+    - JFkxBYPwkfY
+    - eLt-QEwVnxc
+  metrics_path: /metrics
+  relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_video_id
+  - target_label: __address__
+    replacement: your-server:9473
+```
+
+### Channel Monitoring
+Monitor entire YouTube channels and their live streams:
+
+```yaml
+- job_name: 'youtube_channel'
+  scrape_interval: 5m
+  static_configs:
+  - targets:
+    - UCTIuhsbotXQGmhLgmcRYVCQ
+    - UC51Z-ATEJ7Va3BP-JH7bLNA
+    - UCNLH3taW6_MpeSymek4acZg
+    - UCZ_a4if3xoN4_BYtWdrUoRg
+    - UC029bcZGqxOsRkvWrZLhgKQ
+  metrics_path: /metrics
+  relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_channel
+  - target_label: __address__
+    replacement: your-server:9473
+```
+
+### AI Object Detection
+Monitor videos with object detection (e.g., count people in streams):
+
+```yaml
+- job_name: 'youtube_object_detection'
+  scrape_interval: 5m
+  static_configs:
+  - targets:
+    - oefos36Y_Mo
+    - vZEINdmawdc
+  metrics_path: /metrics
+  relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_video_id
+  - target_label: __param_match
+    replacement: person
+  - target_label: __address__
+    replacement: your-server:9473
+```
+
+### Advanced Configuration
+Combine multiple parameters for comprehensive monitoring:
+
+```yaml
+- job_name: 'youtube_advanced'
+  scrape_interval: 3m
+  static_configs:
+  - targets:
+    - JFkxBYPwkfY
+  metrics_path: /metrics
+  relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_video_id
+  - target_label: __param_match
+    replacement: car
+  - target_label: __param_max_height
+    replacement: 1080
+  - target_label: __param_interval
+    replacement: 180
+  - target_label: __address__
+    replacement: your-server:9473
+```
+
+### Configuration Notes
+- **Scrape intervals**: Recommended 5 minutes to balance data freshness with API quota usage
+- **Target format**: Use video IDs (11 characters) or channel IDs (UC + 22 characters) as targets
+- **Server replacement**: Replace `your-server:9473` with your actual server hostname/IP and port
+- **Object detection**: Use common object types like "person", "car", "dog", "cat", "bicycle", etc.
+- **Performance**: Object detection and high-resolution processing may require longer scrape timeouts

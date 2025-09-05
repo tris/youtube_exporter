@@ -7,3 +7,6 @@ opencv-python-headless>=4.8.0
 flask>=2.3.0
 google-api-python-client>=2.0.0
 google-auth>=2.0.0
+transformers>=4.21.0
+m3u8>=3.0.0
+torch>=1.12.0

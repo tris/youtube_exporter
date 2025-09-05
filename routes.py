@@ -16,10 +16,10 @@ app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 
-def periodic_update(video_id, interval=DEFAULT_INTERVAL, fetch_images=True, max_height=None):
+def periodic_update(video_id, interval=DEFAULT_INTERVAL, fetch_images=True, max_height=None, match=None):
     """Periodically update video metrics."""
     while True:
-        update_metrics(video_id, fetch_images, max_height)
+        update_metrics(video_id, fetch_images, max_height, match)
         time.sleep(interval)
 
 
@@ -52,8 +52,10 @@ def metrics():
             max_height = int(max_height_str)
             if max_height <= 0:
                 max_height = None
-        except ValueError:
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid max_height parameter: {max_height_str}")
             max_height = None
+    match = request.args.get('match')  # Object to count in the image
     interval_str = request.args.get('interval', str(DEFAULT_INTERVAL))
     try:
         interval = int(interval_str)
@@ -67,8 +69,10 @@ def metrics():
         if not VIDEO_ID_PATTERN.match(video_id):
             return Response("Invalid video ID format", status=400)
 
-        # Fetch metrics immediately for the first request (skip images for speed)
-        update_metrics(video_id, fetch_images=False, max_height=max_height)
+        # Fetch metrics immediately for the first request
+        # Always do image processing if match is provided, otherwise skip for speed
+        first_request_fetch_images = fetch_images or (match is not None)
+        update_metrics(video_id, fetch_images=first_request_fetch_images, max_height=max_height, match=match)
 
         # Start periodic update if not already running or parameters changed
         thread_key = f"video_{video_id}_{fetch_images}_{interval}"
@@ -78,7 +82,7 @@ def metrics():
         if thread_key not in metrics.threads or not metrics.threads[thread_key].is_alive():
             metrics.threads[thread_key] = threading.Thread(
                 target=periodic_update,
-                args=(video_id, interval, fetch_images),
+                args=(video_id, interval, fetch_images, max_height, match),
                 daemon=True
             )
             metrics.threads[thread_key].start()
@@ -130,6 +134,7 @@ Optional parameters:
 - fetch_images=true/false - Whether to fetch and analyze video frames (default: true)
 - disable_live=true/false - Whether to disable live stream detection for channels (default: false)
 - interval=SECONDS - Update interval in seconds (default: 300, minimum: 30)
+- match=OBJECT - Count identifiable objects in the image (e.g., match=paraglider)
 
 Examples:
 - /metrics?video_id=dQw4w9WgXcQ

@@ -31,7 +31,7 @@ FLASK_HOST = '0.0.0.0'
 FLASK_PORT = int(os.getenv('PORT', 9473))
 
 # Video quality settings
-MAX_VIDEO_HEIGHT = 720  # Limit resolution for efficiency
+MAX_VIDEO_HEIGHT = 4320  # Allow up to 8K resolution (4320p)
 
 # Cache settings
 CHANNEL_VIDEO_THRESHOLD = 4950  # Up to 99 pages of 50 videos

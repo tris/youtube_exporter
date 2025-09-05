@@ -10,7 +10,7 @@ from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from prometheus_client.registry import Collector
 from quota import api_quota_used, api_quota_total
 from youtube_client import fetch_video_details, fetch_channel_details, fetch_channel_live_streams
-from entropy import fetch_two_spaced_frames, calculate_intra_entropy, calculate_inter_entropy
+from entropy import fetch_two_spaced_frames, calculate_intra_entropy, calculate_inter_entropy, count_objects_in_video
 from api_errors import api_errors
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,12 @@ metrics_data = {}  # Key: video_id, Value: metrics dict
 channel_metrics_data = {}  # Key: channel_id, Value: channel metrics dict
 # Separate storage for entropy values that can be updated asynchronously
 entropy_data = {}  # Key: video_id, Value: {'intra_entropy': float, 'inter_entropy': float, 'timestamp': float}
+# Separate storage for object detection results
+object_data = {}  # Key: f"{video_id}_{object_type}", Value: {'object_count': int, 'object_type': str, 'timestamp': float}
+# Track active object detection tasks to prevent duplicates
+active_object_detection = set()  # Set of f"{video_id}_{object_type}" currently being processed
+# Track active entropy computation tasks to prevent duplicates
+active_entropy_computation = set()  # Set of video_id currently being processed
 
 # Prometheus registry
 registry = CollectorRegistry()
@@ -42,6 +48,11 @@ class TimestampedMetricsCollector(Collector):
             'youtube_video_inter_entropy',
             'Shannon entropy of pixel differences between frames separated by ~1 second (bits, 0-8 range)',
             labels=['video_id', 'title']
+        )
+        object_count_family = GaugeMetricFamily(
+            'youtube_video_object_count',
+            'Number of detected objects of specified type in the video frame',
+            labels=['video_id', 'title', 'object_type']
         )
         bitrate_family = GaugeMetricFamily(
             'youtube_video_bitrate',
@@ -140,7 +151,16 @@ class TimestampedMetricsCollector(Collector):
             for video_id, data in metrics_data.items():
                 # Get title for metrics
                 title = data.get('api_data', {}).get('title', '') if 'api_data' in data else ''
-                
+
+                # Object count metrics from separate storage (emit all cached results)
+                for key, obj_info in object_data.items():
+                    if obj_info.get('video_id') == video_id:
+                        object_count_family.add_metric(
+                            [video_id, title, obj_info['object_type']],
+                            obj_info['object_count'],
+                            timestamp=obj_info['timestamp']
+                        )
+
                 # Check for entropy data in separate storage (preferred) or in metrics_data (backward compat)
                 if video_id in entropy_data:
                     entropy_info = entropy_data[video_id]
@@ -269,6 +289,7 @@ class TimestampedMetricsCollector(Collector):
         yield intra_family
         yield inter_family
         yield bitrate_family
+        yield object_count_family
         yield view_family
         yield like_family
         yield concurrent_family
@@ -296,6 +317,7 @@ def format_integer_metrics(output):
         r'(youtube_video_concurrent_viewers\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
         r'(youtube_video_live\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
         r'(youtube_video_live_status\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
+        r'(youtube_video_object_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
         r'(youtube_channel_subscriber_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
         r'(youtube_channel_view_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
         r'(youtube_channel_video_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
@@ -337,33 +359,76 @@ def process_channel_data(channel, live_videos, fetch_images=True):
 
 
 def compute_and_store_entropy(video_id, title=None, max_height=None):
-    """Compute entropy for a video and store it in the global entropy_data."""
-    global entropy_data
-    
-    logger.info(f"Computing entropy for video {video_id}")
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(url, max_height=max_height)
-    
-    if frame1 is not None and frame2 is not None:
-        # Calculate intra-entropy using the second frame
-        intra_entropy = calculate_intra_entropy(frame2)
-        # Calculate inter-entropy between the two spaced frames
-        inter_entropy = calculate_inter_entropy(frame2, frame1)
+    """Compute entropy for a video and store it in the global entropy_data.
+    Returns the high-resolution frame for potential reuse in object detection."""
+    global entropy_data, active_entropy_computation
+
+    try:
+        logger.info(f"Computing entropy for video {video_id}")
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(url, max_height=max_height)
+
+        if frame1 is not None and frame2 is not None:
+            # Calculate intra-entropy using the second frame
+            intra_entropy = calculate_intra_entropy(frame2)
+            # Calculate inter-entropy between the two spaced frames
+            inter_entropy = calculate_inter_entropy(frame2, frame1)
+
+            entropy_data[video_id] = {
+                'intra_entropy': intra_entropy,
+                'inter_entropy': inter_entropy,
+                'bitrate': bitrate,
+                'resolution': resolution,
+                'timestamp': time.time(),
+                'reusable_frame': frame2  # Store high-res frame for object detection reuse
+            }
+
+            bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
+            logger.info(f"Stored entropy for {video_id}: intra={intra_entropy:.2f}, inter={inter_entropy:.2f}, bitrate={bitrate_str} bps, resolution={resolution}")
+            return intra_entropy, inter_entropy, bitrate, resolution, frame2
+        else:
+            logger.warning(f"Failed to fetch frames for {video_id}")
+            return None, None, None, None, None
+    finally:
+        # Always remove from active set when done (success or failure)
+        active_entropy_computation.discard(video_id)
+
+
+def compute_and_store_objects(video_id, object_type, max_height=None):
+    """Compute object detection for a video and store it in the global object_data.
+    Tries to reuse high-resolution frame from entropy calculation if available."""
+    global object_data, active_object_detection, entropy_data
+
+    key = f"{video_id}_{object_type}"
+    try:
+        logger.info(f"Computing object detection for video {video_id}, object_type: {object_type}")
         
-        entropy_data[video_id] = {
-            'intra_entropy': intra_entropy,
-            'inter_entropy': inter_entropy,
-            'bitrate': bitrate,
-            'resolution': resolution,
-            'timestamp': time.time()
-        }
+        # Check if we have a reusable high-resolution frame from recent entropy calculation
+        reuse_frame = None
+        if video_id in entropy_data:
+            entropy_info = entropy_data[video_id]
+            frame_age = time.time() - entropy_info.get('timestamp', 0)
+            if frame_age < 300 and 'reusable_frame' in entropy_info:  # Use frame if < 5 minutes old
+                reuse_frame = entropy_info['reusable_frame']
+                logger.info(f"Reusing high-resolution frame from entropy calculation (age: {frame_age:.0f}s)")
         
-        bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
-        logger.info(f"Stored entropy for {video_id}: intra={intra_entropy:.2f}, inter={inter_entropy:.2f}, bitrate={bitrate_str} bps, resolution={resolution}")
-        return intra_entropy, inter_entropy, bitrate, resolution
-    else:
-        logger.warning(f"Failed to fetch frames for {video_id}")
-        return None, None, None
+        object_count = count_objects_in_video(video_id, object_type, max_height, reuse_frame=reuse_frame)
+
+        if object_count is not None:
+            object_data[key] = {
+                'object_count': object_count,
+                'object_type': object_type,
+                'video_id': video_id,
+                'timestamp': time.time()
+            }
+            logger.info(f"Stored object detection for {video_id}: {object_count} '{object_type}' objects")
+            return object_count
+        else:
+            logger.warning(f"Failed to detect objects for {video_id}")
+            return None
+    finally:
+        # Always remove from active set when done (success or failure)
+        active_object_detection.discard(key)
 
 
 def process_video_data_for_channel(video, fetch_images=True):
@@ -440,8 +505,14 @@ def update_channel_metrics(channel_id, fetch_images=True, disable_live=False):
                         logger.debug(f"Skipping entropy computation for {video_id}, data is {age:.0f}s old")
                         continue
                 
+                # Check if entropy computation is already in progress
+                if video_id in active_entropy_computation:
+                    logger.debug(f"Entropy computation already in progress for {video_id}")
+                    continue
+                
                 # Start background thread to compute entropy
                 logger.info(f"Starting background entropy computation for {video_id}")
+                active_entropy_computation.add(video_id)
                 thread = threading.Thread(
                     target=compute_and_store_entropy,
                     args=(video_id, stream.get('title'), None),
@@ -455,7 +526,7 @@ def update_channel_metrics(channel_id, fetch_images=True, disable_live=False):
     logger.info(f"Updated channel metrics for {channel_id}: {len(live_videos)} live streams, {entropy_count} with existing entropy data")
 
 
-def update_metrics(video_id, fetch_images=True, max_height=None):
+def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
     """Fetch video data and frames, calculate metrics, update storage."""
     global metrics_data, channel_metrics_data, entropy_data
     timestamp = time.time()
@@ -517,7 +588,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None):
         'timestamp': timestamp
     }
 
-    # Handle entropy computation
+    # Handle entropy computation and object counting
     if fetch_images:
         # Check if we already have recent entropy data
         if video_id in entropy_data:
@@ -527,20 +598,64 @@ def update_metrics(video_id, fetch_images=True, max_height=None):
                 # Copy entropy data to metrics_data for backward compatibility
                 metrics_data[video_id]['intra_entropy'] = entropy_data[video_id].get('intra_entropy', 0.0)
                 metrics_data[video_id]['inter_entropy'] = entropy_data[video_id].get('inter_entropy', 0.0)
-                return
-        
-        # Compute entropy synchronously for individual video requests
-        intra_entropy, inter_entropy, bitrate, resolution = compute_and_store_entropy(video_id, api_data.get('title'), max_height)
-        
-        if intra_entropy is not None and inter_entropy is not None:
-            # Also store in metrics_data for backward compatibility
-            metrics_data[video_id]['intra_entropy'] = intra_entropy
-            metrics_data[video_id]['inter_entropy'] = inter_entropy
-            logger.info(f"Updated metrics for {video_id}: intra={intra_entropy:.2f}, inter={inter_entropy:.2f}")
+            else:
+                # Check if entropy computation is already in progress
+                if video_id in active_entropy_computation:
+                    logger.debug(f"Entropy computation already in progress for {video_id}")
+                else:
+                    # Start background entropy computation for individual video requests too
+                    logger.info(f"Starting background entropy computation for {video_id}")
+                    active_entropy_computation.add(video_id)
+                    import threading
+                    thread = threading.Thread(
+                        target=compute_and_store_entropy,
+                        args=(video_id, api_data.get('title'), max_height),
+                        daemon=True
+                    )
+                    thread.start()
         else:
-            # Store zero values if entropy computation failed
-            metrics_data[video_id]['intra_entropy'] = 0.0
-            metrics_data[video_id]['inter_entropy'] = 0.0
+            # Check if entropy computation is already in progress
+            if video_id in active_entropy_computation:
+                logger.debug(f"Entropy computation already in progress for {video_id}")
+            else:
+                # Start background entropy computation for individual video requests too
+                logger.info(f"Starting background entropy computation for {video_id}")
+                active_entropy_computation.add(video_id)
+                import threading
+                thread = threading.Thread(
+                    target=compute_and_store_entropy,
+                    args=(video_id, api_data.get('title'), max_height),
+                    daemon=True
+                )
+                thread.start()
+
+        # If match is provided, also do object detection
+        if match:
+            # Object counting mode - check if we need to start background detection
+            key = f"{video_id}_{match}"
+            if key in object_data:
+                stored_data = object_data[key]
+                # Check if existing data is recent enough
+                age = time.time() - stored_data.get('timestamp', 0)
+                if age < 300:  # Use existing data if recent
+                    logger.debug(f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old")
+                    return
+
+            # Check if detection is already in progress
+            if key in active_object_detection:
+                logger.debug(f"Object detection already in progress for {video_id}, object_type: {match}")
+                return
+
+            # Start background object detection
+            logger.info(f"Starting background object detection for {video_id}, object_type: {match}")
+            active_object_detection.add(key)
+            import threading
+            thread = threading.Thread(
+                target=compute_and_store_objects,
+                args=(video_id, match, max_height),
+                daemon=True
+            )
+            thread.start()
     else:
         logger.info(f"Skipped image fetching for {video_id}, updated API data only")
 
