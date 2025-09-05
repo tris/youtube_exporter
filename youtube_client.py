@@ -37,6 +37,7 @@ def get_youtube_service():
 
 def fetch_video_details(video_id):
     """Fetch video details from YouTube API."""
+    logger.debug(f"Calling check_quota_reset for video {video_id}")
     check_quota_reset()  # Check for daily reset
 
     service = get_youtube_service()
