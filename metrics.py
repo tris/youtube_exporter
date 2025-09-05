@@ -5,6 +5,7 @@ import time
 import logging
 import psutil
 import os
+import threading
 from prometheus_client import generate_latest, CollectorRegistry
 from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from prometheus_client.registry import Collector
@@ -37,7 +38,7 @@ class TimestampedMetricsCollector(Collector):
     def collect(self):
         """Collect metrics with timestamps."""
         # Always create metric families, regardless of data availability
-        
+
         # Entropy metrics
         intra_family = GaugeMetricFamily(
             'youtube_video_intra_entropy',
@@ -146,9 +147,13 @@ class TimestampedMetricsCollector(Collector):
             'Start time of the process since unix epoch in seconds'
         )
 
+        # Track processed video IDs to avoid duplicates
+        processed_videos = set()
+
         # Process video metrics data
         if metrics_data:
             for video_id, data in metrics_data.items():
+                processed_videos.add(video_id)
                 # Get title for metrics
                 title = data.get('api_data', {}).get('title', '') if 'api_data' in data else ''
 
@@ -229,8 +234,14 @@ class TimestampedMetricsCollector(Collector):
                     logger.info(f"Processing {len(channel_data['live_streams'])} live streams for channel {channel_id}")
                     for stream in channel_data['live_streams']:
                         stream_video_id = stream['video_id']
+
+                        # Skip if this video was already processed in the individual video metrics section
+                        if stream_video_id in processed_videos:
+                            logger.debug(f"Skipping duplicate metrics for {stream_video_id} (already processed as individual video)")
+                            continue
+
                         stream_labels = [stream_video_id, stream['title']]
-                        
+
                         # Check for entropy data in the separate entropy_data storage
                         has_entropy = stream_video_id in entropy_data
                         if has_entropy:
@@ -257,6 +268,16 @@ class TimestampedMetricsCollector(Collector):
                             if 'bitrate' in entropy_info and entropy_info['bitrate'] is not None:
                                 logger.info(f"Adding bitrate metric for {stream_video_id}: {entropy_info['bitrate']}")
                                 bitrate_family.add_metric([stream_video_id, stream['title'], entropy_info.get('resolution', 'unknown')], entropy_info['bitrate'], timestamp=entropy_timestamp)
+
+                        # Add object detection metrics from separate storage if available
+                        for key, obj_info in object_data.items():
+                            if obj_info.get('video_id') == stream_video_id:
+                                object_count_family.add_metric(
+                                    [stream_video_id, stream['title'], obj_info['object_type']],
+                                    obj_info['object_count'],
+                                    timestamp=obj_info['timestamp']
+                                )
+                                logger.debug(f"Adding object_count metric for {stream_video_id}: {obj_info['object_count']} '{obj_info['object_type']}' objects")
 
                         # Live status infometric
                         live_status_labels = [stream_video_id, stream['title'], stream.get('live_broadcast_state', 'none')]
@@ -325,10 +346,10 @@ def format_integer_metrics(output):
         r'(youtube_api_quota_units_total\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
         r'(youtube_api_errors_total\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?',
     ]
-    
+
     for pattern in integer_metric_patterns:
         output = re.sub(pattern, r'\1\2\3', output)
-    
+
     return output
 
 
@@ -401,8 +422,8 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
 
     key = f"{video_id}_{object_type}"
     try:
-        logger.info(f"Computing object detection for video {video_id}, object_type: {object_type}")
-        
+        logger.debug(f"Computing object detection for video {video_id}, object_type: {object_type}")
+
         # Check if we have a reusable high-resolution frame from recent entropy calculation
         reuse_frame = None
         if video_id in entropy_data:
@@ -410,8 +431,12 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
             frame_age = time.time() - entropy_info.get('timestamp', 0)
             if frame_age < 300 and 'reusable_frame' in entropy_info:  # Use frame if < 5 minutes old
                 reuse_frame = entropy_info['reusable_frame']
-                logger.info(f"Reusing high-resolution frame from entropy calculation (age: {frame_age:.0f}s)")
-        
+                logger.debug(f"Reusing high-resolution frame from entropy calculation (age: {frame_age:.0f}s)")
+            else:
+                logger.debug(f"Cannot reuse frame - age: {frame_age:.0f}s, has_frame: {'reusable_frame' in entropy_info}")
+        else:
+            logger.debug(f"No entropy data available for {video_id}, will capture new frame")
+
         object_count = count_objects_in_video(video_id, object_type, max_height, reuse_frame=reuse_frame)
 
         if object_count is not None:
@@ -426,6 +451,11 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
         else:
             logger.warning(f"Failed to detect objects for {video_id}")
             return None
+    except Exception as e:
+        logger.error(f"Exception in compute_and_store_objects: {e}")
+        import traceback
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
+        return None
     finally:
         # Always remove from active set when done (success or failure)
         active_object_detection.discard(key)
@@ -463,7 +493,7 @@ def process_video_data_for_channel(video, fetch_images=True):
     return stream_data
 
 
-def update_channel_metrics(channel_id, fetch_images=True, disable_live=False):
+def update_channel_metrics(channel_id, fetch_images=True, disable_live=False, match=None):
     """Fetch channel data and live streams, update storage."""
     global channel_metrics_data, metrics_data, entropy_data
     timestamp = time.time()
@@ -504,12 +534,12 @@ def update_channel_metrics(channel_id, fetch_images=True, disable_live=False):
                     if age < 300:  # Skip if entropy was computed in last 5 minutes
                         logger.debug(f"Skipping entropy computation for {video_id}, data is {age:.0f}s old")
                         continue
-                
+
                 # Check if entropy computation is already in progress
                 if video_id in active_entropy_computation:
                     logger.debug(f"Entropy computation already in progress for {video_id}")
                     continue
-                
+
                 # Start background thread to compute entropy
                 logger.info(f"Starting background entropy computation for {video_id}")
                 active_entropy_computation.add(video_id)
@@ -517,6 +547,40 @@ def update_channel_metrics(channel_id, fetch_images=True, disable_live=False):
                     target=compute_and_store_entropy,
                     args=(video_id, stream.get('title'), None),
                     daemon=True
+                )
+                thread.start()
+
+    # If match is provided, also do object detection for live streams
+    if match and not disable_live:
+        import threading
+        for stream in channel_snapshot['live_streams']:
+            video_id = stream.get('video_id')
+            if video_id and stream.get('live_binary') == 1:
+                # Object counting mode - check if we need to start background detection
+                key = f"{video_id}_{match}"
+                if key in object_data:
+                    stored_data = object_data[key]
+                    # Check if existing data is recent enough
+                    age = time.time() - stored_data.get('timestamp', 0)
+                    if age < 300:  # Use existing data if recent
+                        logger.debug(f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old")
+                        continue
+                    else:
+                        logger.debug(f"Existing object data is stale (age: {age:.0f}s), will recompute")
+
+                # Check if detection is already in progress (with thread-safe add)
+                if key in active_object_detection:
+                    logger.debug(f"Object detection already in progress for {video_id}, object_type: {match}")
+                    continue
+
+                # Add to active set BEFORE starting thread to prevent race conditions
+                active_object_detection.add(key)
+                logger.info(f"Starting object detection for {video_id}, object_type: {match}")
+                thread = threading.Thread(
+                    target=compute_and_store_objects,
+                    args=(video_id, match, None),
+                    daemon=True,
+                    name=f"ChannelObjectDetection-{video_id}-{match}"
                 )
                 thread.start()
 
@@ -631,6 +695,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
 
         # If match is provided, also do object detection
         if match:
+            logger.debug(f"Object detection requested for video_id={video_id}, match={match}")
             # Object counting mode - check if we need to start background detection
             key = f"{video_id}_{match}"
             if key in object_data:
@@ -640,22 +705,27 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 if age < 300:  # Use existing data if recent
                     logger.debug(f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old")
                     return
+                else:
+                    logger.debug(f"Existing object data is stale (age: {age:.0f}s), will recompute")
 
-            # Check if detection is already in progress
+            # Check if detection is already in progress (with thread-safe add)
             if key in active_object_detection:
                 logger.debug(f"Object detection already in progress for {video_id}, object_type: {match}")
                 return
 
-            # Start background object detection
-            logger.info(f"Starting background object detection for {video_id}, object_type: {match}")
+            # Add to active set BEFORE starting thread to prevent race conditions
             active_object_detection.add(key)
+            logger.info(f"Starting object detection for {video_id}, object_type: {match}")
             import threading
             thread = threading.Thread(
                 target=compute_and_store_objects,
                 args=(video_id, match, max_height),
-                daemon=True
+                daemon=True,
+                name=f"ObjectDetection-{video_id}-{match}"
             )
             thread.start()
+        else:
+            logger.debug(f"No 'match' parameter provided, skipping object detection for {video_id}")
     else:
         logger.info(f"Skipped image fetching for {video_id}, updated API data only")
 

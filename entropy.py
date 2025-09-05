@@ -149,7 +149,7 @@ def fetch_two_spaced_frames(url, frame_skip=DEFAULT_FRAME_SKIP, max_height=None)
                     except Exception as e:
                         logger.error(f"Failed to process manifest: {e}")
                         bitrate = None
-                    
+
                     # Get frames for entropy calculation from the manifest stream
                     cap = cv2.VideoCapture(stream_url)
                     frame1 = None
@@ -272,13 +272,14 @@ def fetch_two_spaced_frames(url, frame_skip=DEFAULT_FRAME_SKIP, max_height=None)
 
 def count_objects_in_video(video_id, object_type, max_height=None, reuse_frame=None):
     """Count objects of specified type in a high-resolution snapshot using OWLv2.
-    
+
     Args:
         video_id: YouTube video ID
         object_type: Type of object to detect
         max_height: Maximum height (ignored for object detection - always uses highest resolution)
         reuse_frame: Optional PIL Image to reuse instead of capturing new frame
     """
+    logger.debug(f"Executing object detection for {video_id}, object_type: {object_type}")
     # If we have a reusable frame from entropy calculation, use it
     if reuse_frame is not None:
         logger.info(f"Reusing existing high-resolution frame for object detection")
@@ -286,7 +287,7 @@ def count_objects_in_video(video_id, object_type, max_height=None, reuse_frame=N
     else:
         # Capture a new frame using the same logic as fetch_two_spaced_frames
         url = f"https://www.youtube.com/watch?v={video_id}"
-        
+
         # Use highest resolution format
         ydl_opts = {
             'format': 'best',
@@ -364,27 +365,58 @@ def count_objects_in_video(video_id, object_type, max_height=None, reuse_frame=N
 
     try:
         # Load OWLv2 model and processor
+        logger.debug(f"Loading OwlViT model and processor...")
+
+        # Check PyTorch availability and configuration
+        import torch
+        logger.debug(f"PyTorch version: {torch.__version__}")
+        logger.debug(f"CUDA available: {torch.cuda.is_available()}")
+        logger.debug(f"Device count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
+
         processor = OwlViTProcessor.from_pretrained("google/owlvit-base-patch32")
+        logger.debug(f"OwlViT processor loaded successfully")
+
         model = OwlViTForObjectDetection.from_pretrained("google/owlvit-base-patch32")
+        logger.debug(f"OwlViT model loaded successfully")
 
         # Prepare inputs
         texts = [[f"a photo of a {object_type}"]]
+        logger.debug(f"Prepared text prompt: {texts}")
+        logger.debug(f"Image size: {image.size}, mode: {image.mode}")
+
         inputs = processor(text=texts, images=image, return_tensors="pt")
+        logger.debug(f"Processor inputs prepared successfully")
 
         # Perform object detection
+        logger.debug(f"Running model inference...")
         outputs = model(**inputs)
+        logger.debug(f"Model inference completed successfully")
 
         # Get predictions
         target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
+        logger.debug(f"Target sizes: {target_sizes}")
+
         results = processor.post_process_grounded_object_detection(outputs, target_sizes=target_sizes, threshold=0.1)
+        logger.debug(f"Post-processing completed")
 
         # Count detected objects
         predictions = results[0]
         object_count = len(predictions["scores"])
 
+        if object_count > 0:
+            scores = predictions["scores"].tolist()
+            logger.debug(f"Detected {object_count} '{object_type}' objects with scores: {[f'{s:.3f}' for s in scores]}")
+
         logger.info(f"Detected {object_count} '{object_type}' objects in {video_id}")
         return object_count
 
+    except ImportError as e:
+        logger.error(f"Object detection import error (missing dependencies): {e}")
+        return None
+    except RuntimeError as e:
+        logger.error(f"Object detection runtime error (likely hardware/CUDA issue): {e}")
+        return None
     except Exception as e:
         logger.error(f"Unexpected error in object detection: {e}")
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
         return None

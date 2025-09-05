@@ -23,10 +23,10 @@ def periodic_update(video_id, interval=DEFAULT_INTERVAL, fetch_images=True, max_
         time.sleep(interval)
 
 
-def periodic_update_channel(channel_id, interval=DEFAULT_INTERVAL, fetch_images=True, disable_live=False):
+def periodic_update_channel(channel_id, interval=DEFAULT_INTERVAL, fetch_images=True, disable_live=False, match=None):
     """Periodically update channel metrics."""
     while True:
-        update_channel_metrics(channel_id, fetch_images, disable_live)
+        update_channel_metrics(channel_id, fetch_images, disable_live, match)
         time.sleep(interval)
 
 
@@ -56,6 +56,7 @@ def metrics():
             logger.warning(f"Invalid max_height parameter: {max_height_str}")
             max_height = None
     match = request.args.get('match')  # Object to count in the image
+    logger.debug(f"Request params: video_id={video_id}, channel_id={channel_id}, fetch_images={fetch_images}, match={match}")
     interval_str = request.args.get('interval', str(DEFAULT_INTERVAL))
     try:
         interval = int(interval_str)
@@ -72,6 +73,7 @@ def metrics():
         # Fetch metrics immediately for the first request
         # Always do image processing if match is provided, otherwise skip for speed
         first_request_fetch_images = fetch_images or (match is not None)
+        logger.debug(f"Calling update_metrics with fetch_images={first_request_fetch_images}, match={match}")
         update_metrics(video_id, fetch_images=first_request_fetch_images, max_height=max_height, match=match)
 
         # Start periodic update if not already running or parameters changed
@@ -93,17 +95,18 @@ def metrics():
             return Response("Invalid channel ID format", status=400)
 
         # Fetch metrics immediately for the first request (skip images for speed)
-        update_channel_metrics(channel_id, fetch_images=False, disable_live=disable_live)
+        # Don't pass match parameter to immediate call to avoid duplicate object detection
+        update_channel_metrics(channel_id, fetch_images=False, disable_live=disable_live, match=None)
 
         # Start periodic update if not already running or parameters changed
-        thread_key = f"channel_{channel_id}_{fetch_images}_{disable_live}_{interval}"
+        thread_key = f"channel_{channel_id}_{fetch_images}_{disable_live}_{interval}_{match}"
         if not hasattr(metrics, 'threads'):
             metrics.threads = {}
 
         if thread_key not in metrics.threads or not metrics.threads[thread_key].is_alive():
             metrics.threads[thread_key] = threading.Thread(
                 target=periodic_update_channel,
-                args=(channel_id, interval, fetch_images, disable_live),
+                args=(channel_id, interval, fetch_images, disable_live, match),
                 daemon=True
             )
             metrics.threads[thread_key].start()
