@@ -505,6 +505,12 @@ def count_objects_in_video(
             "google/owlvit-base-patch32"
         )
         logger.debug(f"OwlViT model loaded successfully")
+        logger.debug(f"Model device: {next(model.parameters()).device}")
+
+        # Move model to CPU if it's on meta device (common in Docker environments)
+        if next(model.parameters()).device.type == "meta":
+            model = model.to("cpu")
+            logger.debug("Moved model from meta device to CPU")
 
         # Prepare inputs
         texts = [[f"a photo of a {object_type}"]]
@@ -513,6 +519,9 @@ def count_objects_in_video(
 
         inputs = processor(text=texts, images=image, return_tensors="pt")
         logger.debug(f"Processor inputs prepared successfully")
+        logger.debug(
+            f"Input tensor devices: {[inputs[k].device for k in inputs if hasattr(inputs[k], 'device')]}"
+        )
 
         # Perform object detection
         logger.debug("Running model inference...")
