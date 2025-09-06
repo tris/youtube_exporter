@@ -184,6 +184,7 @@ class TimestampedMetricsCollector(Collector):
                     logger.warning(
                         f"Empty title for video {video_id} in entropy metrics collection"
                     )
+                    continue  # Suppress metrics for videos without title
 
                 # Ensure title is safe for Prometheus labels
                 title = safe_label_value(title)
@@ -252,9 +253,16 @@ class TimestampedMetricsCollector(Collector):
                 # YouTube API metrics
                 if "api_data" in data:
                     api_data = data["api_data"]
+                    api_title = api_data.get("title", "")
+                    if not api_title:
+                        logger.warning(
+                            f"Empty title for video {video_id} in API metrics, suppressing"
+                        )
+                        continue  # Suppress API metrics for videos without title
+
                     labels = [
                         video_id,
-                        safe_label_value(api_data.get("title", "")),
+                        safe_label_value(api_title),
                     ]
 
                     view_family.add_metric(
@@ -334,9 +342,16 @@ class TimestampedMetricsCollector(Collector):
                             )
                             continue
 
+                        stream_title = stream.get("title", "")
+                        if not stream_title:
+                            logger.warning(
+                                f"Empty title for stream {stream_video_id}, suppressing metrics"
+                            )
+                            continue  # Suppress metrics for streams without title
+
                         stream_labels = [
                             stream_video_id,
-                            safe_label_value(stream.get("title", "")),
+                            safe_label_value(stream_title),
                         ]
 
                         # Check for entropy data in the separate entropy_data storage
@@ -675,12 +690,9 @@ def process_video_data_for_channel(video, fetch_images=True):
     title = safe_label_value(snippet.get("title", ""))
     video_id = video.get("id", "unknown")
 
-    # Provide fallback title if empty due to API issues
+    # Default to empty title if not available
     if not title:
-        title = f"Video {video_id} (API Error)"
-        logger.warning(
-            f"Using fallback title for video {video_id} due to missing API data"
-        )
+        title = ""
 
     logger.debug(f"Processed stream {video_id}: title='{title}'")
 
@@ -860,12 +872,9 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
         title = safe_label_value(snippet.get("title", ""))
         channel_id = snippet.get("channelId", "")
 
-        # Provide fallback title if empty due to API issues
+        # Default to empty title if not available
         if not title:
-            title = f"Video {video_id} (API Error)"
-            logger.warning(
-                f"Using fallback title for video {video_id} due to missing API data"
-            )
+            title = ""
 
         api_data = {
             "view_count": view_count,
@@ -914,7 +923,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             "concurrent_viewers": 0,
             "live_broadcast_state": "none",
             "live_binary": 0,
-            "title": f"Video {video_id} (API Error)",
+            "title": "",
             "channel_id": "",
         }
 
