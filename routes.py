@@ -161,8 +161,20 @@ def metrics():
             metrics.threads[thread_key].start()
 
     # Generate and return Prometheus metrics
-    formatted_output = get_prometheus_metrics()
-    return Response(formatted_output, mimetype="text/plain")
+    try:
+        formatted_output = get_prometheus_metrics()
+        return Response(formatted_output, mimetype="text/plain")
+    except Exception as e:
+        logger.error(f"Error in /metrics endpoint: {e}")
+        # Return error metrics instead of crashing
+        error_response = f"""# HELP youtube_exporter_endpoint_error Indicates an error in the metrics endpoint
+# TYPE youtube_exporter_endpoint_error gauge
+youtube_exporter_endpoint_error{{endpoint="/metrics"}} 1
+# HELP youtube_exporter_endpoint_error_info Error information for metrics endpoint
+# TYPE youtube_exporter_endpoint_error_info gauge
+youtube_exporter_endpoint_error_info{{endpoint="/metrics",error_message="{str(e).replace('"', '\\"')}"}} 1
+"""
+        return Response(error_response, mimetype="text/plain", status=500)
 
 
 @app.route("/health")

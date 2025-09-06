@@ -186,11 +186,18 @@ class TimestampedMetricsCollector(Collector):
                         f"Empty title for video {video_id} in entropy metrics collection"
                     )
 
+                # Ensure title is safe for Prometheus labels
+                title = safe_label_value(title)
+
                 # Object count metrics from separate storage (emit all cached results)
                 for key, obj_info in object_data.items():
                     if obj_info.get("video_id") == video_id:
                         object_count_family.add_metric(
-                            [video_id, title, obj_info["object_type"]],
+                            [
+                                video_id,
+                                title,
+                                safe_label_value(obj_info["object_type"]),
+                            ],
                             obj_info["object_count"],
                             timestamp=obj_info["timestamp"],
                         )
@@ -221,7 +228,9 @@ class TimestampedMetricsCollector(Collector):
                             [
                                 video_id,
                                 title,
-                                entropy_info.get("resolution", "unknown"),
+                                safe_label_value(
+                                    entropy_info.get("resolution", "unknown")
+                                ),
                             ],
                             entropy_info["bitrate"],
                             timestamp=entropy_timestamp,
@@ -244,7 +253,10 @@ class TimestampedMetricsCollector(Collector):
                 # YouTube API metrics
                 if "api_data" in data:
                     api_data = data["api_data"]
-                    labels = [video_id, api_data.get("title", "")]
+                    labels = [
+                        video_id,
+                        safe_label_value(api_data.get("title", "")),
+                    ]
 
                     view_family.add_metric(
                         labels,
@@ -270,8 +282,10 @@ class TimestampedMetricsCollector(Collector):
                     # Live status infometric
                     live_status_labels = [
                         video_id,
-                        api_data.get("title", ""),
-                        api_data.get("live_broadcast_state", "none"),
+                        safe_label_value(api_data.get("title", "")),
+                        safe_label_value(
+                            api_data.get("live_broadcast_state", "none")
+                        ),
                     ]
                     live_status_family.add_metric(
                         live_status_labels, 1, timestamp=data["timestamp"]
@@ -284,7 +298,7 @@ class TimestampedMetricsCollector(Collector):
                     channel_info = channel_data["channel_info"]
                     channel_labels = [
                         channel_id,
-                        channel_info.get("title", ""),
+                        safe_label_value(channel_info.get("title", "")),
                     ]
 
                     channel_subscriber_family.add_metric(
@@ -321,7 +335,10 @@ class TimestampedMetricsCollector(Collector):
                             )
                             continue
 
-                        stream_labels = [stream_video_id, stream["title"]]
+                        stream_labels = [
+                            stream_video_id,
+                            safe_label_value(stream.get("title", "")),
+                        ]
 
                         # Check for entropy data in the separate entropy_data storage
                         has_entropy = stream_video_id in entropy_data
@@ -390,9 +407,13 @@ class TimestampedMetricsCollector(Collector):
                                 bitrate_family.add_metric(
                                     [
                                         stream_video_id,
-                                        stream["title"],
-                                        entropy_info.get(
-                                            "resolution", "unknown"
+                                        safe_label_value(
+                                            stream.get("title", "")
+                                        ),
+                                        safe_label_value(
+                                            entropy_info.get(
+                                                "resolution", "unknown"
+                                            )
                                         ),
                                     ],
                                     entropy_info["bitrate"],
@@ -405,8 +426,12 @@ class TimestampedMetricsCollector(Collector):
                                 object_count_family.add_metric(
                                     [
                                         stream_video_id,
-                                        stream["title"],
-                                        obj_info["object_type"],
+                                        safe_label_value(
+                                            stream.get("title", "")
+                                        ),
+                                        safe_label_value(
+                                            obj_info["object_type"]
+                                        ),
                                     ],
                                     obj_info["object_count"],
                                     timestamp=obj_info["timestamp"],
@@ -418,8 +443,10 @@ class TimestampedMetricsCollector(Collector):
                         # Live status infometric
                         live_status_labels = [
                             stream_video_id,
-                            stream["title"],
-                            stream.get("live_broadcast_state", "none"),
+                            safe_label_value(stream.get("title", "")),
+                            safe_label_value(
+                                stream.get("live_broadcast_state", "none")
+                            ),
                         ]
                         live_status_family.add_metric(
                             live_status_labels,
@@ -473,6 +500,15 @@ class TimestampedMetricsCollector(Collector):
         yield process_memory_family
         yield process_virtual_memory_family
         yield process_start_time_family
+
+
+def safe_label_value(value):
+    """Ensure label values are safe strings for Prometheus."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return str(value)
+    return value
 
 
 def format_integer_metrics(output):
@@ -637,6 +673,20 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
 
 def process_video_data_for_channel(video, fetch_images=True):
     """Process video data for channel live streams."""
+    if not video:
+        logger.warning(
+            "Received None video data in process_video_data_for_channel"
+        )
+        return {
+            "video_id": "unknown",
+            "title": "Unknown Video (API Error)",
+            "view_count": 0,
+            "like_count": 0,
+            "concurrent_viewers": 0,
+            "live_broadcast_state": "none",
+            "live_binary": 0,
+        }
+
     stats = video.get("statistics", {})
     lsd = video.get("liveStreamingDetails", {})
     snippet = video.get("snippet", {})
@@ -647,8 +697,16 @@ def process_video_data_for_channel(video, fetch_images=True):
 
     live_broadcast_content = snippet.get("liveBroadcastContent", "none")
     live_binary = 1 if live_broadcast_content == "live" else 0
-    title = snippet.get("title", "")
-    video_id = video.get("id")
+    title = safe_label_value(snippet.get("title", ""))
+    video_id = video.get("id", "unknown")
+
+    # Provide fallback title if empty due to API issues
+    if not title:
+        title = f"Video {video_id} (API Error)"
+        logger.warning(
+            f"Using fallback title for video {video_id} due to missing API data"
+        )
+
     logger.debug(f"Processed stream {video_id}: title='{title}'")
 
     stream_data = {
@@ -818,8 +876,15 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
         live_broadcast_content = snippet.get("liveBroadcastContent", "none")
         live_binary = 1 if live_broadcast_content == "live" else 0
 
-        title = snippet.get("title", "")
+        title = safe_label_value(snippet.get("title", ""))
         channel_id = snippet.get("channelId", "")
+
+        # Provide fallback title if empty due to API issues
+        if not title:
+            title = f"Video {video_id} (API Error)"
+            logger.warning(
+                f"Using fallback title for video {video_id} due to missing API data"
+            )
 
         api_data = {
             "view_count": view_count,
@@ -840,7 +905,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 )  # No live streams for video requests, no image fetching
                 channel_metrics_data[channel_id] = {
                     "channel_info": {
-                        "title": channel_snapshot["title"],
+                        "title": safe_label_value(channel_snapshot["title"]),
                         "subscriber_count": channel_snapshot[
                             "subscriber_count"
                         ],
@@ -858,7 +923,19 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             f"YouTube API data for {video_id}: views={view_count}, likes={like_count}, live={live_binary}, title='{title}'"
         )
     else:
-        logger.warning(f"Failed to fetch YouTube API data for {video_id}")
+        logger.warning(
+            f"Failed to fetch YouTube API data for {video_id}, using fallback data"
+        )
+        # Provide fallback API data when YouTube API fails
+        api_data = {
+            "view_count": 0,
+            "like_count": 0,
+            "concurrent_viewers": 0,
+            "live_broadcast_state": "none",
+            "live_binary": 0,
+            "title": f"Video {video_id} (API Error)",
+            "channel_id": "",
+        }
 
     # Store API data
     metrics_data[video_id] = {"api_data": api_data, "timestamp": timestamp}
@@ -974,9 +1051,23 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
 
 def get_prometheus_metrics():
     """Generate Prometheus metrics output."""
-    output = generate_latest(registry).decode("utf-8")
-    formatted_output = format_integer_metrics(output)
-    return formatted_output
+    try:
+        output = generate_latest(registry).decode("utf-8")
+        formatted_output = format_integer_metrics(output)
+        return formatted_output
+    except Exception as e:
+        logger.error(f"Error generating Prometheus metrics: {e}")
+        logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
+
+        # Return basic error metrics instead of crashing
+        error_metrics = f"""# HELP youtube_exporter_error Indicates an error in metrics generation
+# TYPE youtube_exporter_error gauge
+youtube_exporter_error{{error_type="metrics_generation"}} 1
+# HELP youtube_exporter_error_info Error information
+# TYPE youtube_exporter_error_info gauge
+youtube_exporter_error_info{{error_type="metrics_generation",error_message="{str(e).replace('"', '\\"')}"}} 1
+"""
+        return error_metrics
 
 
 # Register the custom collector
