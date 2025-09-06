@@ -18,18 +18,14 @@ if MODEL_CACHE_DIR:
     # Ensure directory exists
     os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 
-from transformers import OwlViTForObjectDetection, OwlViTProcessor
+from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
 logger = logging.getLogger(__name__)
 
-# Global model cache with enhanced thread synchronization
-_model_cache = {}
-_model_lock = threading.RLock()  # Use RLock for reentrancy
-_model_loading_event = (
-    threading.Event()
-)  # Event to signal when loading is complete
-_model_loading_thread = None  # Track which thread is doing the loading
-_model_loading_error = None  # Store any error that occurred during loading
+# Global model variables - loaded once on import
+_model = None
+_processor = None
+_inference_lock = threading.Lock()  # Ensure thread-safe model inference
 
 
 def check_opencv_ffmpeg_support():
@@ -63,191 +59,6 @@ def check_opencv_ffmpeg_support():
         logger.warning("No FFMPEG configuration found in OpenCV build info")
 
     return ffmpeg_enabled, backends
-
-
-def _load_models_thread_worker():
-    """Worker function that actually loads the models. Should only be called by one thread."""
-    global _model_cache, _model_loading_error
-
-    thread_id = threading.current_thread().ident
-
-    try:
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] Starting model download and loading process..."
-        )
-
-        # Log which cache directory is being used
-        if MODEL_CACHE_DIR:
-            logger.info(
-                f"[DOWNLOADER-{thread_id}] Using custom cache directory: {MODEL_CACHE_DIR}"
-            )
-        else:
-            logger.debug(
-                f"[DOWNLOADER-{thread_id}] Using default HuggingFace cache directory"
-            )
-
-        # Check OpenCV FFMPEG support
-        ffmpeg_enabled, backends = check_opencv_ffmpeg_support()
-        if not ffmpeg_enabled:
-            logger.warning(
-                "OpenCV may not have FFMPEG support - video capture might fail"
-            )
-
-        # Check PyTorch availability and configuration
-        import torch
-
-        logger.debug(f"PyTorch version: {torch.__version__}")
-        logger.debug(f"CUDA available: {torch.cuda.is_available()}")
-        logger.debug(
-            f"Device count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}"
-        )
-
-        # Load processor - this is the first component that downloads model files
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] Starting OwlViTProcessor.from_pretrained() - downloading processor files..."
-        )
-        start_time = time.time()
-        processor = OwlViTProcessor.from_pretrained(
-            "google/owlvit-base-patch32"
-        )
-        processor_time = time.time() - start_time
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] OwlViTProcessor loaded successfully in {processor_time:.1f}s"
-        )
-
-        # Load model - this downloads the main model files
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] Starting OwlViTForObjectDetection.from_pretrained() - downloading model files..."
-        )
-        start_time = time.time()
-        model = OwlViTForObjectDetection.from_pretrained(
-            "google/owlvit-base-patch32", dtype=torch.float32
-        )
-        model_time = time.time() - start_time
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] OwlViTForObjectDetection loaded successfully in {model_time:.1f}s"
-        )
-
-        # Explicitly move model to CPU if it's not already there
-        model = model.to("cpu")
-        final_device = next(model.parameters()).device
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] Model loaded and moved to device: {final_device}"
-        )
-
-        # Verify model is on CPU
-        if final_device.type != "cpu":
-            error_msg = (
-                f"Failed to load model on CPU, loaded on {final_device}"
-            )
-            logger.error(f"[DOWNLOADER-{thread_id}] {error_msg}")
-            raise RuntimeError(error_msg)
-
-        # Cache the loaded model and processor
-        _model_cache["model"] = model
-        _model_cache["processor"] = processor
-        logger.info(
-            f"[DOWNLOADER-{thread_id}] Model and processor cached successfully"
-        )
-
-        # Clear any previous error
-        _model_loading_error = None
-
-    except Exception as e:
-        logger.error(f"[DOWNLOADER-{thread_id}] Failed to load models: {e}")
-        logger.debug(
-            f"[DOWNLOADER-{thread_id}] Full traceback: {traceback.format_exc()}"
-        )
-        _model_loading_error = e
-        raise
-
-
-def get_cached_model_and_processor():
-    """Get cached OwlViT model and processor, loading them if necessary.
-    Thread-safe singleton pattern with single-threaded downloading to prevent lock contention.
-    """
-    global _model_cache, _model_lock, _model_loading_event, _model_loading_thread, _model_loading_error
-
-    thread_id = threading.current_thread().ident
-    logger.debug(
-        f"[THREAD-{thread_id}] get_cached_model_and_processor() called"
-    )
-
-    # Fast path: Check if model is already cached (no lock needed)
-    if "model" in _model_cache and "processor" in _model_cache:
-        logger.debug(
-            f"[THREAD-{thread_id}] Using cached OwlViT model and processor (fast path)"
-        )
-        return _model_cache["model"], _model_cache["processor"]
-
-    # Slow path: Need to potentially load the model
-    with _model_lock:
-        # Double-check: model might have been loaded while waiting for lock
-        if "model" in _model_cache and "processor" in _model_cache:
-            return _model_cache["model"], _model_cache["processor"]
-
-        # Check if another thread is already loading
-        if _model_loading_thread is not None:
-            logger.info(
-                f"[THREAD-{thread_id}] Another thread is downloading the model, waiting..."
-            )
-            # Release lock and wait for loading to complete
-            _model_lock.release()
-            try:
-                # Wait for loading to complete (with timeout to prevent hanging)
-                if _model_loading_event.wait(timeout=600):  # 10 minute timeout
-                    logger.debug(
-                        f"[THREAD-{thread_id}] Model loading completed by other thread"
-                    )
-                    # Re-acquire lock to check results
-                    _model_lock.acquire()
-                    if _model_loading_error:
-                        logger.error(
-                            f"[THREAD-{thread_id}] Model loading failed in other thread: {_model_loading_error}"
-                        )
-                        raise _model_loading_error
-                    return _model_cache["model"], _model_cache["processor"]
-                else:
-                    logger.error(
-                        f"[THREAD-{thread_id}] Timeout waiting for model loading"
-                    )
-                    _model_lock.acquire()
-                    raise RuntimeError(
-                        "Timeout waiting for model loading to complete"
-                    )
-            except Exception:
-                _model_lock.acquire()
-                raise
-
-        # This thread will be responsible for loading
-        logger.info(
-            f"[THREAD-{thread_id}] This thread will download the model"
-        )
-        _model_loading_thread = thread_id
-        _model_loading_event.clear()  # Reset the event
-
-        try:
-            # Perform the actual loading
-            _load_models_thread_worker()
-
-            # Signal that loading is complete
-            _model_loading_event.set()
-            logger.info(
-                f"[THREAD-{thread_id}] Model loading complete, signaling other threads"
-            )
-
-            return _model_cache["model"], _model_cache["processor"]
-
-        except Exception:
-            # Signal that loading failed
-            _model_loading_event.set()
-            logger.error(
-                f"[THREAD-{thread_id}] Model loading failed, signaling other threads"
-            )
-            raise
-        finally:
-            # Reset loading state
-            _model_loading_thread = None
 
 
 def count_objects_in_video(
@@ -385,14 +196,21 @@ def count_objects_in_video(
             return None
 
     try:
-        # Use cached model and processor to prevent concurrent loading
+        # Use global model and processor loaded at import
         logger.debug(
-            f"[THREAD-{thread_id}] Getting cached OwlViT model and processor..."
+            f"[THREAD-{thread_id}] Using pre-loaded OWLv2 model and processor..."
         )
 
         import torch
 
-        model, processor = get_cached_model_and_processor()
+        # Use global model and processor loaded at import
+        model, processor = _model, _processor
+
+        if model is None or processor is None:
+            logger.error(
+                "Model or processor not loaded - this should not happen!"
+            )
+            return None
 
         final_device = next(model.parameters()).device
         logger.debug(
@@ -410,19 +228,22 @@ def count_objects_in_video(
             f"Input tensor devices: {[inputs[k].device for k in inputs if hasattr(inputs[k], 'device')]}"
         )
 
-        # Perform object detection
-        logger.debug("Running model inference...")
-        outputs = model(**inputs)
-        logger.debug(f"Model inference completed successfully")
+        # Perform object detection with thread safety
+        with _inference_lock:
+            logger.debug("Running model inference...")
+            # Use no_grad() to prevent memory accumulation during inference
+            with torch.no_grad():
+                outputs = model(**inputs)
+            logger.debug(f"Model inference completed successfully")
 
-        # Get predictions
-        target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
-        logger.debug(f"Target sizes: {target_sizes}")
+            # Get predictions
+            target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
+            logger.debug(f"Target sizes: {target_sizes}")
 
-        results = processor.post_process_grounded_object_detection(
-            outputs, target_sizes=target_sizes, threshold=0.1
-        )
-        logger.debug("Post-processing completed")
+            results = processor.post_process_grounded_object_detection(
+                outputs, target_sizes=target_sizes, threshold=0.1
+            )
+            logger.debug("Post-processing completed")
 
         # Count detected objects
         predictions = results[0]
@@ -453,3 +274,75 @@ def count_objects_in_video(
         logger.error(f"Unexpected error in object detection: {e}")
         logger.debug(f"Full traceback: {traceback.format_exc()}")
         return None
+
+
+# Load models immediately upon module import
+def _load_models():
+    """Load models and assign to global variables."""
+    global _model, _processor
+
+    thread_id = threading.current_thread().ident
+    logger.info(
+        f"[STARTUP-{thread_id}] Loading OWLv2 models on module import..."
+    )
+
+    try:
+        # Check OpenCV FFMPEG support
+        ffmpeg_enabled, backends = check_opencv_ffmpeg_support()
+        if not ffmpeg_enabled:
+            logger.warning(
+                "OpenCV may not have FFMPEG support - video capture might fail"
+            )
+
+        # Check PyTorch availability and configuration
+        import torch
+
+        logger.debug(f"PyTorch version: {torch.__version__}")
+        logger.debug(f"CUDA available: {torch.cuda.is_available()}")
+
+        # Load processor
+        logger.info(f"[STARTUP-{thread_id}] Loading Owlv2Processor...")
+        start_time = time.time()
+        _processor = Owlv2Processor.from_pretrained(
+            "google/owlv2-base-patch16-ensemble", use_fast=True
+        )
+        processor_time = time.time() - start_time
+        logger.info(
+            f"[STARTUP-{thread_id}] Owlv2Processor loaded in {processor_time:.1f}s"
+        )
+
+        # Load model
+        logger.info(
+            f"[STARTUP-{thread_id}] Loading Owlv2ForObjectDetection..."
+        )
+        start_time = time.time()
+        _model = Owlv2ForObjectDetection.from_pretrained(
+            "google/owlv2-base-patch16-ensemble", dtype=torch.float32
+        )
+        model_time = time.time() - start_time
+        logger.info(
+            f"[STARTUP-{thread_id}] Owlv2ForObjectDetection loaded in {model_time:.1f}s"
+        )
+
+        # Move to CPU and set to eval mode to save memory
+        _model = _model.to("cpu")
+        _model.eval()  # Set to evaluation mode to disable dropout/batch norm
+        final_device = next(_model.parameters()).device
+        logger.info(
+            f"[STARTUP-{thread_id}] Models loaded successfully on device: {final_device}"
+        )
+
+    except Exception as e:
+        logger.error(
+            f"[STARTUP-{thread_id}] Failed to load models on import: {e}"
+        )
+        logger.error(
+            f"[STARTUP-{thread_id}] Application will exit due to model loading failure"
+        )
+        import sys
+
+        sys.exit(1)
+
+
+# Execute model loading
+_load_models()
