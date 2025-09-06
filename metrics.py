@@ -2,11 +2,10 @@
 
 import logging
 import os
-import re
 import time
 
 import psutil
-from prometheus_client import CollectorRegistry, generate_latest
+from prometheus_client import CollectorRegistry
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.registry import Collector
 
@@ -15,9 +14,9 @@ from api_errors import api_errors
 from entropy import (
     calculate_spatial_entropy,
     calculate_temporal_entropy,
-    count_objects_in_video,
     fetch_two_spaced_frames,
 )
+from object_detection import count_objects_in_video
 from youtube_client import (
     fetch_channel_details,
     fetch_channel_live_streams,
@@ -511,30 +510,6 @@ def safe_label_value(value):
     return value
 
 
-def format_integer_metrics(output):
-    """Format integer metrics to remove unnecessary decimal places."""
-    # Pattern to match metrics that should be integers (counts, binary values)
-    integer_metric_patterns = [
-        r"(youtube_video_view_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_video_like_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_video_concurrent_viewers\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_video_live\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_video_live_status\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_video_object_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_channel_subscriber_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_channel_view_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_channel_video_count\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_api_quota_units_today\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_api_quota_units_total\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-        r"(youtube_api_errors_total\{[^}]*\}\s+)(\d+)\.0+(\s+\d+)?",
-    ]
-
-    for pattern in integer_metric_patterns:
-        output = re.sub(pattern, r"\1\2\3", output)
-
-    return output
-
-
 def process_channel_data(channel, live_videos, fetch_images=True):
     """Process YouTube API channel response into channel snapshot."""
     stats = channel.get("statistics", {})
@@ -835,6 +810,12 @@ def update_channel_metrics(
                 logger.info(
                     f"Starting object detection for {video_id}, object_type: {match}"
                 )
+                logger.debug(
+                    f"CONCURRENCY DEBUG: Active object detection tasks: {len(active_object_detection)}, Active entropy tasks: {len(active_entropy_computation)}"
+                )
+                logger.debug(
+                    f"CONCURRENCY DEBUG: Current active object keys: {list(active_object_detection)}"
+                )
                 thread = threading.Thread(
                     target=compute_and_store_objects,
                     args=(video_id, match, None),
@@ -1030,6 +1011,12 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             logger.info(
                 f"Starting object detection for {video_id}, object_type: {match}"
             )
+            logger.debug(
+                f"CONCURRENCY DEBUG: Active object detection tasks: {len(active_object_detection)}, Active entropy tasks: {len(active_entropy_computation)}"
+            )
+            logger.debug(
+                f"CONCURRENCY DEBUG: Current active object keys: {list(active_object_detection)}"
+            )
             import threading
 
             thread = threading.Thread(
@@ -1047,27 +1034,6 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
         logger.info(
             f"Skipped image fetching for {video_id}, updated API data only"
         )
-
-
-def get_prometheus_metrics():
-    """Generate Prometheus metrics output."""
-    try:
-        output = generate_latest(registry).decode("utf-8")
-        formatted_output = format_integer_metrics(output)
-        return formatted_output
-    except Exception as e:
-        logger.error(f"Error generating Prometheus metrics: {e}")
-        logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
-
-        # Return basic error metrics instead of crashing
-        error_metrics = f"""# HELP youtube_exporter_error Indicates an error in metrics generation
-# TYPE youtube_exporter_error gauge
-youtube_exporter_error{{error_type="metrics_generation"}} 1
-# HELP youtube_exporter_error_info Error information
-# TYPE youtube_exporter_error_info gauge
-youtube_exporter_error_info{{error_type="metrics_generation",error_message="{str(e).replace('"', '\\"')}"}} 1
-"""
-        return error_metrics
 
 
 # Register the custom collector

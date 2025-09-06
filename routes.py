@@ -5,6 +5,7 @@ import threading
 import time
 
 from flask import Flask, Response, request
+from prometheus_client import generate_latest
 
 from config import (
     CHANNEL_ID_PATTERN,
@@ -13,7 +14,7 @@ from config import (
     VIDEO_ID_PATTERN,
 )
 from metrics import (
-    get_prometheus_metrics,
+    registry,
     update_channel_metrics,
     update_metrics,
 )
@@ -162,8 +163,8 @@ def metrics():
 
     # Generate and return Prometheus metrics
     try:
-        formatted_output = get_prometheus_metrics()
-        return Response(formatted_output, mimetype="text/plain")
+        output = generate_latest(registry).decode("utf-8")
+        return Response(output, mimetype="text/plain")
     except Exception as e:
         logger.error(f"Error in /metrics endpoint: {e}")
         # Return error metrics instead of crashing

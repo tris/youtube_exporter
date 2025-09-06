@@ -175,6 +175,7 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 - `YOUTUBE_API_KEY` (required): YouTube Data API v3 key
 - `PORT` (optional): Server port (default: 9473)
 - `LOG_LEVEL` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
+- `MODEL_CACHE_DIR` (optional): Custom directory for HuggingFace model cache to persist downloaded models between restarts
 
 ### Performance Settings
 - **Maximum Resolution**: Up to 8K (4320p) - configurable via `max_height` parameter
@@ -194,6 +195,14 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 ### Basic Deployment
 ```bash
 export YOUTUBE_API_KEY="your_api_key_here"
+export LOG_LEVEL="INFO"
+python main.py
+```
+
+### Deployment with Persistent Model Cache
+```bash
+export YOUTUBE_API_KEY="your_api_key_here"
+export MODEL_CACHE_DIR="/opt/youtube-exporter/model-cache"
 export LOG_LEVEL="INFO"
 python main.py
 ```

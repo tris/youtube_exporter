@@ -1,13 +1,13 @@
 """Entropy calculation module for video frame analysis."""
 
 import logging
-import traceback
+import time
+import urllib.request
 
 import cv2
 import numpy as np
 import yt_dlp
 from PIL import Image
-from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 from config import DEFAULT_FRAME_SKIP, MAX_VIDEO_HEIGHT
 
@@ -104,8 +104,6 @@ def fetch_two_spaced_frames(
                 )  # Log first 100 chars of URL
 
                 # Calculate effective bitrate by measuring data for 1 second worth of playback frames
-                import time
-                import urllib.request
 
                 # First, check if the stream URL is a manifest file
                 is_manifest = False
@@ -200,7 +198,7 @@ def fetch_two_spaced_frames(
                         bitrate = None
 
                     # Get frames for entropy calculation from the manifest stream
-                    cap = cv2.VideoCapture(stream_url)
+                    cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
                     frame1 = None
                     frame2 = None
                     if cap.isOpened():
@@ -220,7 +218,7 @@ def fetch_two_spaced_frames(
                         frame1 = frame2 = None
                 else:
                     # Handle direct video streams
-                    cap = cv2.VideoCapture(stream_url)
+                    cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
                     if not cap.isOpened():
                         logger.error(
                             f"Failed to open stream URL: {stream_url}"
@@ -352,217 +350,3 @@ def fetch_two_spaced_frames(
     except Exception as e:
         logger.error(f"Unexpected error fetching frames from {url}: {e}")
     return None, None, bitrate, None
-
-
-def count_objects_in_video(
-    video_id, object_type, max_height=None, reuse_frame=None
-):
-    """Count objects of specified type in a high-resolution snapshot using OWLv2.
-
-    Args:
-        video_id: YouTube video ID
-        object_type: Type of object to detect
-        max_height: Maximum height (ignored for object detection - always uses highest resolution)
-        reuse_frame: Optional PIL Image to reuse instead of capturing new frame
-    """
-    logger.debug(
-        f"Executing object detection for {video_id}, object_type: {object_type}"
-    )
-    # If we have a reusable frame from entropy calculation, use it
-    if reuse_frame is not None:
-        logger.info(
-            "Reusing existing high-resolution frame for object detection"
-        )
-        image = reuse_frame
-    else:
-        # Capture a new frame using the same logic as fetch_two_spaced_frames
-        url = f"https://www.youtube.com/watch?v={video_id}"
-
-        # Use highest resolution format
-        ydl_opts = {
-            "format": "best",
-            "quiet": True,
-            "no_warnings": True,
-        }
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-
-                if "formats" in info and info["formats"]:
-                    # Select the highest resolution format available
-                    formats = [
-                        f for f in info["formats"] if f.get("height", 0) > 0
-                    ]
-                    if not formats:
-                        formats = info["formats"]
-                    format = max(
-                        formats, key=lambda f: f.get("height", 0) or 0
-                    )
-                    stream_url = format["url"]
-                    resolution = (
-                        f"{format.get('width', 0)}x{format.get('height', 0)}"
-                    )
-                    selected_codec = format.get("vcodec", "unknown")
-
-                    logger.info(
-                        f"Selected format for object detection: {resolution} (codec: {selected_codec})"
-                    )
-
-                    # Capture a single high-resolution frame
-                    ret = False
-                    frame = None
-
-                    cap = cv2.VideoCapture(stream_url)
-                    if not cap.isOpened():
-                        logger.error(
-                            f"Failed to open stream URL: {stream_url} (codec: {selected_codec})"
-                        )
-                        logger.warning(
-                            "This might be due to an incompatible codec. Trying alternative formats..."
-                        )
-
-                        # Try alternative formats if the selected one fails
-                        for alt_fmt in sorted(
-                            info["formats"],
-                            key=lambda f: f.get("height", 0) or 0,
-                            reverse=True,
-                        )[
-                            1:4
-                        ]:  # Next 3 best
-                            alt_height = alt_fmt.get("height", 0)
-                            alt_codec = alt_fmt.get("vcodec", "unknown")
-                            if alt_height > 0 and alt_height != format.get(
-                                "height", 0
-                            ):
-                                logger.info(
-                                    f"Trying alternative format: {alt_fmt.get('width', 0)}x{alt_height} (codec: {alt_codec})"
-                                )
-                                try:
-                                    alt_cap = cv2.VideoCapture(alt_fmt["url"])
-                                    if alt_cap.isOpened():
-                                        alt_ret, alt_frame = alt_cap.read()
-                                        alt_cap.release()
-                                        if alt_ret:
-                                            logger.info(
-                                                f"Successfully captured frame with alternative format: {alt_fmt.get('width', 0)}x{alt_height}"
-                                            )
-                                            frame = alt_frame
-                                            resolution = f"{alt_fmt.get('width', 0)}x{alt_height}"
-                                            ret = True
-                                            break
-                                except Exception as e:
-                                    logger.debug(
-                                        f"Alternative format failed: {e}"
-                                    )
-                                    continue
-
-                        if not ret:
-                            logger.error("All format attempts failed")
-                            return None
-                    else:
-                        # Primary format opened successfully
-                        ret, frame = cap.read()
-                        cap.release()
-
-                    if not ret:
-                        logger.error("Failed to read frame from stream")
-                        return None
-
-                    # Convert to PIL Image
-                    image = Image.fromarray(
-                        cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    )
-
-        except yt_dlp.DownloadError as e:
-            logger.error(f"yt-dlp download error for {url}: {e}")
-            return None
-        except Exception as e:
-            logger.error(
-                f"Unexpected error fetching frame for object detection: {e}"
-            )
-            return None
-
-    try:
-        # Load OWLv2 model and processor
-        logger.debug("Loading OwlViT model and processor...")
-
-        # Check PyTorch availability and configuration
-        import torch
-
-        logger.debug(f"PyTorch version: {torch.__version__}")
-        logger.debug(f"CUDA available: {torch.cuda.is_available()}")
-        logger.debug(
-            f"Device count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}"
-        )
-
-        processor = OwlViTProcessor.from_pretrained(
-            "google/owlvit-base-patch32"
-        )
-        logger.debug(f"OwlViT processor loaded successfully")
-
-        model = OwlViTForObjectDetection.from_pretrained(
-            "google/owlvit-base-patch32"
-        )
-        logger.debug(f"OwlViT model loaded successfully")
-        logger.debug(f"Model device: {next(model.parameters()).device}")
-
-        # Move model to CPU if it's on meta device (common in Docker environments)
-        if next(model.parameters()).device.type == "meta":
-            model = model.to("cpu")
-            logger.debug("Moved model from meta device to CPU")
-
-        # Prepare inputs
-        texts = [[f"a photo of a {object_type}"]]
-        logger.debug(f"Prepared text prompt: {texts}")
-        logger.debug(f"Image size: {image.size}, mode: {image.mode}")
-
-        inputs = processor(text=texts, images=image, return_tensors="pt")
-        logger.debug(f"Processor inputs prepared successfully")
-        logger.debug(
-            f"Input tensor devices: {[inputs[k].device for k in inputs if hasattr(inputs[k], 'device')]}"
-        )
-
-        # Perform object detection
-        logger.debug("Running model inference...")
-        outputs = model(**inputs)
-        logger.debug(f"Model inference completed successfully")
-
-        # Get predictions
-        target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
-        logger.debug(f"Target sizes: {target_sizes}")
-
-        results = processor.post_process_grounded_object_detection(
-            outputs, target_sizes=target_sizes, threshold=0.1
-        )
-        logger.debug("Post-processing completed")
-
-        # Count detected objects
-        predictions = results[0]
-        object_count = len(predictions["scores"])
-
-        if object_count > 0:
-            scores = predictions["scores"].tolist()
-            logger.debug(
-                f"Detected {object_count} '{object_type}' objects with scores: {[f'{s:.3f}' for s in scores]}"
-            )
-
-        logger.info(
-            f"Detected {object_count} '{object_type}' objects in {video_id}"
-        )
-        return object_count
-
-    except ImportError as e:
-        logger.error(
-            f"Object detection import error (missing dependencies): {e}"
-        )
-        return None
-    except RuntimeError as e:
-        logger.error(
-            f"Object detection runtime error (likely hardware/CUDA issue): {e}"
-        )
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error in object detection: {e}")
-        logger.debug(f"Full traceback: {traceback.format_exc()}")
-        return None

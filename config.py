@@ -44,6 +44,11 @@ MAX_VIDEO_HEIGHT = 4320  # Allow up to 8K resolution (4320p)
 # Cache settings
 CHANNEL_VIDEO_THRESHOLD = 4950  # Up to 99 pages of 50 videos
 
+# Model cache settings
+MODEL_CACHE_DIR = os.getenv(
+    "MODEL_CACHE_DIR"
+)  # Custom cache directory for HuggingFace models
+
 # Quota costs (YouTube Data API v3)
 QUOTA_COSTS = {
     "videos.list": 1,
