@@ -35,8 +35,8 @@ def get_youtube_service():
     return youtube_service
 
 
-def fetch_video_details(video_id):
-    """Fetch video details from YouTube API."""
+def fetch_video_details(video_id, retries=2):
+    """Fetch video details from YouTube API with retry logic."""
     logger.debug(f"Calling check_quota_reset for video {video_id}")
     check_quota_reset()  # Check for daily reset
 
@@ -45,29 +45,55 @@ def fetch_video_details(video_id):
         logger.error("YouTube API service not available")
         return None
 
-    try:
-        request = service.videos().list(
-            part="snippet,statistics,liveStreamingDetails", id=video_id
-        )
-        response = request.execute()
+    for attempt in range(retries + 1):
+        try:
+            request = service.videos().list(
+                part="snippet,statistics,liveStreamingDetails", id=video_id
+            )
+            response = request.execute()
 
-        # Track quota usage
-        add_quota_units("videos.list")
+            # Track quota usage
+            add_quota_units("videos.list")
 
-        if not response.get("items"):
+            if not response.get("items"):
+                return None
+
+            video_data = response["items"][0]
+            snippet = video_data.get("snippet", {})
+            title = snippet.get("title", "")
+            logger.debug(
+                f"Fetched video {video_id}: title='{title}' (length: {len(title)})"
+            )
+            return video_data
+        except HttpError as e:
+            logger.error(
+                f"YouTube API error for video {video_id} (attempt {attempt+1}/{retries+1}): {e}"
+            )
+            code = e.resp.status
+            endpoint = "videos.list"
+            key = (code, endpoint)
+            api_errors[key] = api_errors.get(key, 0) + 1
+            if attempt < retries and code in [
+                500,
+                502,
+                503,
+                504,
+            ]:  # Retry on server errors
+                import time
+
+                time.sleep(1 * (attempt + 1))  # Exponential backoff
+                continue
             return None
+        except Exception as e:
+            logger.error(
+                f"Unexpected error fetching video {video_id} (attempt {attempt+1}/{retries+1}): {e}"
+            )
+            if attempt < retries:
+                import time
 
-        return response["items"][0]
-    except HttpError as e:
-        logger.error(f"YouTube API error for video {video_id}: {e}")
-        code = e.resp.status
-        endpoint = "videos.list"
-        key = (code, endpoint)
-        api_errors[key] = api_errors.get(key, 0) + 1
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error fetching video {video_id}: {e}")
-        return None
+                time.sleep(1 * (attempt + 1))
+                continue
+            return None
 
 
 def fetch_channel_details(channel_id):

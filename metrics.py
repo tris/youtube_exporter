@@ -174,6 +174,17 @@ class TimestampedMetricsCollector(Collector):
                     if "api_data" in data
                     else ""
                 )
+                # Fallback to title from entropy_data if api_data title is empty
+                if not title and video_id in entropy_data:
+                    title = entropy_data[video_id].get("title", "")
+                    if title:
+                        logger.info(
+                            f"Using fallback title from entropy_data for {video_id}: '{title}'"
+                        )
+                if not title:
+                    logger.warning(
+                        f"Empty title for video {video_id} in entropy metrics collection"
+                    )
 
                 # Object count metrics from separate storage (emit all cached results)
                 for key, obj_info in object_data.items():
@@ -521,7 +532,7 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
     global entropy_data, active_entropy_computation
 
     try:
-        logger.info(f"Computing entropy for video {video_id}")
+        logger.info(f"Computing entropy for video {video_id}, title='{title}'")
         url = f"https://www.youtube.com/watch?v={video_id}"
         frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(
             url, max_height=max_height
@@ -540,6 +551,7 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
                 "resolution": resolution,
                 "timestamp": time.time(),
                 "reusable_frame": frame2,  # Store high-res frame for object detection reuse
+                "title": title,  # Store title to prevent race conditions
             }
 
             bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
@@ -637,6 +649,7 @@ def process_video_data_for_channel(video, fetch_images=True):
     live_binary = 1 if live_broadcast_content == "live" else 0
     title = snippet.get("title", "")
     video_id = video.get("id")
+    logger.debug(f"Processed stream {video_id}: title='{title}'")
 
     stream_data = {
         "video_id": video_id,
@@ -842,7 +855,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 )
 
         logger.info(
-            f"YouTube API data for {video_id}: views={view_count}, likes={like_count}, live={live_binary}"
+            f"YouTube API data for {video_id}: views={view_count}, likes={like_count}, live={live_binary}, title='{title}'"
         )
     else:
         logger.warning(f"Failed to fetch YouTube API data for {video_id}")
