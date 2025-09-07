@@ -337,8 +337,6 @@ def fetch_channel_live_streams(channel, disable_live=False):
     # Determine strategy based on video count
     stats = channel.get("statistics", {})
     video_count = int(stats.get("videoCount", 0))
-    if video_count == 0:
-        return []
     use_full_pagination = video_count <= CHANNEL_VIDEO_THRESHOLD
 
     # If this is the first time, decide between comprehensive search or playlist method
