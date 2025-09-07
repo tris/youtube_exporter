@@ -354,20 +354,21 @@ def fetch_channel_live_streams(channel, disable_live=False):
     video_count = int(stats.get("videoCount", 0))
     use_full_pagination = video_count <= CHANNEL_VIDEO_THRESHOLD
 
-    # If this is the first time, decide between comprehensive search or playlist method
+    # Always fetch recent videos using the efficient playlist method
+    recent_live_videos = fetch_recent_channel_videos(channel)
+
+    # Handle initialization if needed
     if not channel_cache.initialized:
         if use_full_pagination:
             logger.info(
                 f"Channel {channel_id} has {video_count} videos (≤{CHANNEL_VIDEO_THRESHOLD}), using playlist method"
             )
-            recent_videos = fetch_recent_channel_videos(channel)
-            if recent_videos:
-                new_cache = set(video["id"] for video in recent_videos)
-                cache.update_cache(channel_id, new_cache)
-                logger.info(
-                    f"Cached {len(new_cache)} live streams for channel {channel_id}"
-                )
-                return recent_videos
+            # For low video count, we already have the recent videos, so just cache them
+            new_cache = set(video["id"] for video in recent_live_videos)
+            cache.update_cache(channel_id, new_cache)
+            logger.info(
+                f"Cached {len(new_cache)} live streams for channel {channel_id}"
+            )
         else:
             logger.info(
                 f"Channel {channel_id} has {video_count} videos (>{CHANNEL_VIDEO_THRESHOLD}), using Search API"
@@ -376,31 +377,42 @@ def fetch_channel_live_streams(channel, disable_live=False):
                 channel_id
             )
             if comprehensive_videos:
-                new_cache = set(video["id"] for video in comprehensive_videos)
+                # Merge comprehensive results with recent videos
+                all_live_videos_temp = {
+                    video["id"]: video for video in recent_live_videos
+                }
+                for video in comprehensive_videos:
+                    all_live_videos_temp[video["id"]] = video
+                recent_live_videos = list(all_live_videos_temp.values())
+
+                new_cache = set(video["id"] for video in recent_live_videos)
                 cache.update_cache(channel_id, new_cache)
                 logger.info(
                     f"Cached {len(new_cache)} live streams from comprehensive search for channel {channel_id}"
                 )
-                return comprehensive_videos
-
-    # Always fetch recent videos using the efficient playlist method
-    recent_live_videos = fetch_recent_channel_videos(channel)
 
     # Create a map to track all live videos (deduplication)
     all_live_videos = {video["id"]: video for video in recent_live_videos}
+    recent_ids = set(video["id"] for video in recent_live_videos)
 
-    # If we have cached IDs, refresh their status
+    # If we have cached IDs, refresh their status (excluding already fetched recent videos)
     if channel_cache.initialized and channel_cache.cached_live_ids:
-        cached_videos, still_live_ids = refresh_cached_videos(
-            channel_cache.cached_live_ids
-        )
+        cached_ids_to_refresh = channel_cache.cached_live_ids - recent_ids
+        if cached_ids_to_refresh:
+            cached_videos, still_live_ids = refresh_cached_videos(
+                cached_ids_to_refresh
+            )
 
-        # Add still-live cached videos
-        for video in cached_videos:
-            all_live_videos[video["id"]] = video
+            # Add still-live cached videos
+            for video in cached_videos:
+                all_live_videos[video["id"]] = video
+        else:
+            cached_videos = []
+            still_live_ids = set()
 
-        # Update cache with only still-live IDs
-        cache.update_cache(channel_id, still_live_ids)
+        # Update cache with all current live IDs (recent + still live cached)
+        all_current_live_ids = recent_ids | still_live_ids
+        cache.update_cache(channel_id, all_current_live_ids)
 
     result = list(all_live_videos.values())
     logger.info(
