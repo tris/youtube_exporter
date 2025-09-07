@@ -15,34 +15,64 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_spatial_entropy(image):
-    """Calculate Shannon entropy of pixel intensities."""
-    # Convert to grayscale
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
-    # Calculate histogram
-    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-    hist = hist / hist.sum()  # Normalize
-    # Calculate entropy
-    entropy = -np.sum(
-        hist * np.log2(hist + 1e-10)
-    )  # Add small value to avoid log(0)
-    return entropy
+    """Calculate color-aware Shannon entropy across HSV channels."""
+    img_array = np.array(image)
+    if img_array.shape[2] != 3:
+        return
+
+    # Convert to HSV
+    hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+    channels = cv2.split(hsv)
+    channel_names = ["hue", "saturation", "value"]
+    entropies = {}
+
+    for name, channel in zip(channel_names, channels):
+        # For hue, use 180 bins (0-179 in OpenCV)
+        bins = 180 if name == "hue" else 256
+        hist_range = [0, 180] if name == "hue" else [0, 256]
+        hist = cv2.calcHist([channel], [0], None, [bins], hist_range)
+        hist = hist / hist.sum()  # Normalize
+        # Calculate entropy
+        entropy = -np.sum(hist[hist > 0] * np.log2(hist[hist > 0]))
+        entropies[name] = entropy
+
+    return entropies
 
 
 def calculate_temporal_entropy(current_image, previous_image):
-    """Calculate entropy of the difference between frames."""
+    """Calculate color-aware temporal entropy across HSV channel differences."""
     if previous_image is None:
-        return 0.0
-    # Convert to grayscale
-    current_gray = cv2.cvtColor(np.array(current_image), cv2.COLOR_RGB2GRAY)
-    previous_gray = cv2.cvtColor(np.array(previous_image), cv2.COLOR_RGB2GRAY)
-    # Calculate difference
-    diff = cv2.absdiff(current_gray, previous_gray)
-    # Calculate histogram of difference
-    hist = cv2.calcHist([diff], [0], None, [256], [0, 256])
-    hist = hist / hist.sum()
-    # Calculate entropy
-    entropy = -np.sum(hist * np.log2(hist + 1e-10))
-    return entropy
+        return {"hue": 0.0, "saturation": 0.0, "value": 0.0}
+
+    current_array = np.array(current_image)
+    previous_array = np.array(previous_image)
+    if current_array.shape[2] != 3 or previous_array.shape[2] != 3:
+        return
+
+    # Convert to HSV
+    current_hsv = cv2.cvtColor(current_array, cv2.COLOR_RGB2HSV)
+    previous_hsv = cv2.cvtColor(previous_array, cv2.COLOR_RGB2HSV)
+    current_channels = cv2.split(current_hsv)
+    previous_channels = cv2.split(previous_hsv)
+
+    channel_names = ["hue", "saturation", "value"]
+    entropies = {}
+
+    for name, curr_ch, prev_ch in zip(
+        channel_names, current_channels, previous_channels
+    ):
+        # Calculate difference
+        diff = cv2.absdiff(curr_ch, prev_ch)
+        # For hue, use 180 bins
+        bins = 180 if name == "hue" else 256
+        hist_range = [0, 180] if name == "hue" else [0, 256]
+        hist = cv2.calcHist([diff], [0], None, [bins], hist_range)
+        hist = hist / hist.sum()
+        # Calculate entropy
+        entropy = -np.sum(hist[hist > 0] * np.log2(hist[hist > 0]))
+        entropies[name] = entropy
+
+    return entropies
 
 
 def fetch_two_spaced_frames(

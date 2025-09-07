@@ -31,7 +31,7 @@ channel_metrics_data = {}  # Key: channel_id, Value: channel metrics dict
 # Separate storage for entropy values that can be updated asynchronously
 entropy_data = (
     {}
-)  # Key: video_id, Value: {'spatial_entropy': float, 'temporal_entropy': float, 'timestamp': float}
+)  # Key: video_id, Value: {'spatial_entropy': dict|float, 'temporal_entropy': dict|float, 'timestamp': float}
 # Separate storage for object detection results
 object_data = (
     {}
@@ -55,14 +55,35 @@ class TimestampedMetricsCollector(Collector):
         # Always create metric families, regardless of data availability
 
         # Entropy metrics
-        spatial_family = GaugeMetricFamily(
-            "youtube_video_spatial_entropy",
-            "Shannon entropy of pixel intensities within a single frame (bits, 0-8 range)",
+        # HSV entropy metrics
+        spatial_hue_family = GaugeMetricFamily(
+            "youtube_video_spatial_entropy_hue",
+            "Hue component entropy of pixel intensities within a single frame (bits, 0-8 range)",
             labels=["video_id", "title"],
         )
-        temporal_family = GaugeMetricFamily(
-            "youtube_video_temporal_entropy",
-            "Shannon entropy of pixel differences between frames separated by ~1 second (bits, 0-8 range)",
+        spatial_saturation_family = GaugeMetricFamily(
+            "youtube_video_spatial_entropy_saturation",
+            "Saturation component entropy of pixel intensities within a single frame (bits, 0-8 range)",
+            labels=["video_id", "title"],
+        )
+        spatial_value_family = GaugeMetricFamily(
+            "youtube_video_spatial_entropy_value",
+            "Value component entropy of pixel intensities within a single frame (bits, 0-8 range)",
+            labels=["video_id", "title"],
+        )
+        temporal_hue_family = GaugeMetricFamily(
+            "youtube_video_temporal_entropy_hue",
+            "Hue component entropy of pixel differences between frames (bits, 0-8 range)",
+            labels=["video_id", "title"],
+        )
+        temporal_saturation_family = GaugeMetricFamily(
+            "youtube_video_temporal_entropy_saturation",
+            "Saturation component entropy of pixel differences between frames (bits, 0-8 range)",
+            labels=["video_id", "title"],
+        )
+        temporal_value_family = GaugeMetricFamily(
+            "youtube_video_temporal_entropy_value",
+            "Value component entropy of pixel differences between frames (bits, 0-8 range)",
             labels=["video_id", "title"],
         )
         object_count_family = GaugeMetricFamily(
@@ -202,24 +223,54 @@ class TimestampedMetricsCollector(Collector):
                             timestamp=obj_info["timestamp"],
                         )
 
-                # Check for entropy data in separate storage (preferred) or in metrics_data (backward compat)
+                # Check for entropy data in separate storage
                 if video_id in entropy_data:
                     entropy_info = entropy_data[video_id]
                     entropy_timestamp = entropy_info.get(
                         "timestamp", data["timestamp"]
                     )
                     if "spatial_entropy" in entropy_info:
-                        spatial_family.add_metric(
-                            [video_id, title],
-                            entropy_info["spatial_entropy"],
-                            timestamp=entropy_timestamp,
-                        )
+                        spatial_ent = entropy_info["spatial_entropy"]
+                        # HSV format
+                        if "hue" in spatial_ent:
+                            spatial_hue_family.add_metric(
+                                [video_id, title],
+                                spatial_ent["hue"],
+                                timestamp=entropy_timestamp,
+                            )
+                        if "saturation" in spatial_ent:
+                            spatial_saturation_family.add_metric(
+                                [video_id, title],
+                                spatial_ent["saturation"],
+                                timestamp=entropy_timestamp,
+                            )
+                        if "value" in spatial_ent:
+                            spatial_value_family.add_metric(
+                                [video_id, title],
+                                spatial_ent["value"],
+                                timestamp=entropy_timestamp,
+                            )
                     if "temporal_entropy" in entropy_info:
-                        temporal_family.add_metric(
-                            [video_id, title],
-                            entropy_info["temporal_entropy"],
-                            timestamp=entropy_timestamp,
-                        )
+                        temporal_ent = entropy_info["temporal_entropy"]
+                        # HSV format
+                        if "hue" in temporal_ent:
+                            temporal_hue_family.add_metric(
+                                [video_id, title],
+                                temporal_ent["hue"],
+                                timestamp=entropy_timestamp,
+                            )
+                        if "saturation" in temporal_ent:
+                            temporal_saturation_family.add_metric(
+                                [video_id, title],
+                                temporal_ent["saturation"],
+                                timestamp=entropy_timestamp,
+                            )
+                        if "value" in temporal_ent:
+                            temporal_value_family.add_metric(
+                                [video_id, title],
+                                temporal_ent["value"],
+                                timestamp=entropy_timestamp,
+                            )
                     if (
                         "bitrate" in entropy_info
                         and entropy_info["bitrate"] is not None
@@ -234,20 +285,6 @@ class TimestampedMetricsCollector(Collector):
                             ],
                             entropy_info["bitrate"],
                             timestamp=entropy_timestamp,
-                        )
-                elif "spatial_entropy" in data or "temporal_entropy" in data:
-                    # Backward compatibility: check metrics_data
-                    if "spatial_entropy" in data:
-                        spatial_family.add_metric(
-                            [video_id, title],
-                            data["spatial_entropy"],
-                            timestamp=data["timestamp"],
-                        )
-                    if "temporal_entropy" in data:
-                        temporal_family.add_metric(
-                            [video_id, title],
-                            data["temporal_entropy"],
-                            timestamp=data["timestamp"],
                         )
 
                 # YouTube API metrics
@@ -358,8 +395,16 @@ class TimestampedMetricsCollector(Collector):
                         has_entropy = stream_video_id in entropy_data
                         if has_entropy:
                             entropy_info = entropy_data[stream_video_id]
+                            spatial_ent = entropy_info.get(
+                                "spatial_entropy", {}
+                            )
+                            temporal_ent = entropy_info.get(
+                                "temporal_entropy", {}
+                            )
+                            spatial_log = f"hue={spatial_ent.get('hue', 0):.2f}, sat={spatial_ent.get('saturation', 0):.2f}, val={spatial_ent.get('value', 0):.2f}"
+                            temporal_log = f"hue={temporal_ent.get('hue', 0):.2f}, sat={temporal_ent.get('saturation', 0):.2f}, val={temporal_ent.get('value', 0):.2f}"
                             logger.info(
-                                f"Found entropy data for {stream_video_id}: spatial={entropy_info.get('spatial_entropy', 0):.2f}, temporal={entropy_info.get('temporal_entropy', 0):.2f}"
+                                f"Found entropy data for {stream_video_id}: spatial=({spatial_log}), temporal=({temporal_log})"
                             )
                         else:
                             logger.debug(
@@ -394,23 +439,47 @@ class TimestampedMetricsCollector(Collector):
                                 "timestamp", channel_data["timestamp"]
                             )
                             if "spatial_entropy" in entropy_info:
-                                logger.info(
-                                    f"Adding spatial_entropy metric for {stream_video_id}: {entropy_info['spatial_entropy']}"
-                                )
-                                spatial_family.add_metric(
-                                    stream_labels,
-                                    entropy_info["spatial_entropy"],
-                                    timestamp=entropy_timestamp,
-                                )
+                                spatial_ent = entropy_info["spatial_entropy"]
+                                # HSV format
+                                if "hue" in spatial_ent:
+                                    spatial_hue_family.add_metric(
+                                        stream_labels,
+                                        spatial_ent["hue"],
+                                        timestamp=entropy_timestamp,
+                                    )
+                                if "saturation" in spatial_ent:
+                                    spatial_saturation_family.add_metric(
+                                        stream_labels,
+                                        spatial_ent["saturation"],
+                                        timestamp=entropy_timestamp,
+                                    )
+                                if "value" in spatial_ent:
+                                    spatial_value_family.add_metric(
+                                        stream_labels,
+                                        spatial_ent["value"],
+                                        timestamp=entropy_timestamp,
+                                    )
                             if "temporal_entropy" in entropy_info:
-                                logger.info(
-                                    f"Adding temporal_entropy metric for {stream_video_id}: {entropy_info['temporal_entropy']}"
-                                )
-                                temporal_family.add_metric(
-                                    stream_labels,
-                                    entropy_info["temporal_entropy"],
-                                    timestamp=entropy_timestamp,
-                                )
+                                temporal_ent = entropy_info["temporal_entropy"]
+                                # HSV format
+                                if "hue" in temporal_ent:
+                                    temporal_hue_family.add_metric(
+                                        stream_labels,
+                                        temporal_ent["hue"],
+                                        timestamp=entropy_timestamp,
+                                    )
+                                if "saturation" in temporal_ent:
+                                    temporal_saturation_family.add_metric(
+                                        stream_labels,
+                                        temporal_ent["saturation"],
+                                        timestamp=entropy_timestamp,
+                                    )
+                                if "value" in temporal_ent:
+                                    temporal_value_family.add_metric(
+                                        stream_labels,
+                                        temporal_ent["value"],
+                                        timestamp=entropy_timestamp,
+                                    )
                             if (
                                 "bitrate" in entropy_info
                                 and entropy_info["bitrate"] is not None
@@ -494,8 +563,12 @@ class TimestampedMetricsCollector(Collector):
             logger.warning(f"Failed to collect process metrics: {e}")
 
         # Always yield all metric families
-        yield spatial_family
-        yield temporal_family
+        yield spatial_hue_family
+        yield spatial_saturation_family
+        yield spatial_value_family
+        yield temporal_hue_family
+        yield temporal_saturation_family
+        yield temporal_value_family
         yield bitrate_family
         yield object_count_family
         yield view_family
@@ -566,9 +639,9 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
         )
 
         if frame1 is not None and frame2 is not None:
-            # Calculate spatial-entropy using the second frame
+            # Calculate color-aware spatial-entropy using the second frame
             spatial_entropy = calculate_spatial_entropy(frame2)
-            # Calculate temporal-entropy between the two spaced frames
+            # Calculate color-aware temporal-entropy between the two spaced frames
             temporal_entropy = calculate_temporal_entropy(frame2, frame1)
 
             entropy_data[video_id] = {
@@ -582,12 +655,27 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
             }
 
             bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
+            # Log entropy values (handle both dict and float formats)
+            if isinstance(spatial_entropy, dict):
+                spatial_log = f"hue={spatial_entropy.get('hue', 0):.2f}, sat={spatial_entropy.get('saturation', 0):.2f}, val={spatial_entropy.get('value', 0):.2f}"
+            else:
+                spatial_log = f"{spatial_entropy:.2f}"
+            if isinstance(temporal_entropy, dict):
+                temporal_log = f"hue={temporal_entropy.get('hue', 0):.2f}, sat={temporal_entropy.get('saturation', 0):.2f}, val={temporal_entropy.get('value', 0):.2f}"
+            else:
+                temporal_log = f"{temporal_entropy:.2f}"
             logger.info(
-                f"Stored entropy for {video_id}: spatial={spatial_entropy:.2f}, temporal={temporal_entropy:.2f}, bitrate={bitrate_str} bps, resolution={resolution}"
+                f"Stored HSV entropy for {video_id}: spatial=({spatial_log}), temporal=({temporal_log}), bitrate={bitrate_str} bps, resolution={resolution}"
             )
+            # Return averaged values
+            spatial_avg = sum(spatial_entropy.values()) / len(spatial_entropy)
+            temporal_avg = sum(temporal_entropy.values()) / len(
+                temporal_entropy
+            )
+
             return (
-                spatial_entropy,
-                temporal_entropy,
+                spatial_avg,
+                temporal_avg,
                 bitrate,
                 resolution,
                 frame2,
@@ -940,13 +1028,13 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 logger.debug(
                     f"Using existing entropy data for {video_id}, data is {age:.0f}s old"
                 )
-                # Copy entropy data to metrics_data for backward compatibility
-                metrics_data[video_id]["spatial_entropy"] = entropy_data[
-                    video_id
-                ].get("spatial_entropy", 0.0)
-                metrics_data[video_id]["temporal_entropy"] = entropy_data[
-                    video_id
-                ].get("temporal_entropy", 0.0)
+                # Copy entropy data to metrics_data
+                spatial_ent = entropy_data[video_id].get("spatial_entropy", {})
+                temporal_ent = entropy_data[video_id].get(
+                    "temporal_entropy", {}
+                )
+                metrics_data[video_id]["spatial_entropy"] = spatial_ent
+                metrics_data[video_id]["temporal_entropy"] = temporal_ent
             else:
                 # Check if entropy computation is already in progress
                 if video_id in active_entropy_computation:
