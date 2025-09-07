@@ -157,6 +157,11 @@ class TimestampedMetricsCollector(Collector):
             "1 if the scrape of YouTube API succeeded, else 0",
             labels=["channel_id", "channel_title"],
         )
+        channel_live_family = GaugeMetricFamily(
+            "youtube_channel_live",
+            "Number of currently live streams for this channel",
+            labels=["channel_id", "channel_title"],
+        )
 
         # Quota metrics
         quota_total_family = CounterMetricFamily(
@@ -370,6 +375,11 @@ class TimestampedMetricsCollector(Collector):
                     )
                     channel_scrape_success_family.add_metric(
                         channel_labels, 1, timestamp=channel_data["timestamp"]
+                    )
+                    channel_live_family.add_metric(
+                        channel_labels,
+                        channel_data.get("live_count", 0),
+                        timestamp=channel_data["timestamp"],
                     )
 
                 # Live stream metrics for channels
@@ -595,6 +605,7 @@ class TimestampedMetricsCollector(Collector):
         yield channel_view_family
         yield channel_video_family
         yield channel_scrape_success_family
+        yield channel_live_family
         yield quota_total_family
         yield errors_family
         yield process_cpu_family
@@ -814,6 +825,13 @@ def update_channel_metrics(
         channel_data, live_videos, fetch_images=False
     )
 
+    # Count the number of live streams
+    live_count = sum(
+        1
+        for stream in channel_snapshot["live_streams"]
+        if stream.get("live_binary", 0) == 1
+    )
+
     # Store channel metrics
     with metrics_lock:
         channel_metrics_data[channel_id] = {
@@ -824,6 +842,7 @@ def update_channel_metrics(
                 "video_count": channel_snapshot["video_count"],
             },
             "live_streams": channel_snapshot["live_streams"],
+            "live_count": live_count,
             "timestamp": timestamp,
         }
 
@@ -993,6 +1012,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                             "video_count": channel_snapshot["video_count"],
                         },
                         "live_streams": [],
+                        "live_count": 0,  # No live streams fetched for video requests
                         "timestamp": timestamp,
                     }
                 logger.info(

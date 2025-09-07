@@ -47,6 +47,7 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 - `youtube_channel_subscriber_count{channel_id="...", channel_title="..."}`: Total subscriber count reported by YouTube for this channel
 - `youtube_channel_view_count{channel_id="...", channel_title="..."}`: Total view count reported by YouTube for this channel
 - `youtube_channel_video_count{channel_id="...", channel_title="..."}`: Total video count reported by YouTube for this channel
+- `youtube_channel_live{channel_id="...", channel_title="..."}`: Number of currently live streams for this channel
 - `youtube_channel_scrape_success{channel_id="...", channel_title="..."}`: 1 if the scrape of YouTube API succeeded, else 0
 
 ### System Metrics
