@@ -50,9 +50,8 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 - `youtube_channel_scrape_success{channel_id="...", channel_title="..."}`: 1 if the scrape of YouTube API succeeded, else 0
 
 ### System Metrics
-- `youtube_api_quota_units_today{endpoint="..."}`: Estimated YouTube Data API quota units consumed today, labeled by endpoint
-- `youtube_api_quota_units_total{endpoint="..."}`: Total YouTube Data API quota units consumed, labeled by endpoint
-- `youtube_api_errors_total{code="...", endpoint="..."}`: Total YouTube API errors, labeled by error code and endpoint
+- `youtube_api_quota_units_total{endpoint="...", key="..."}`: Total YouTube Data API quota units consumed, labeled by endpoint and key index
+- `youtube_api_errors_total{code="...", endpoint="...", key="..."}`: Total YouTube API errors, labeled by error code, endpoint, and key index
 
 ### Process Metrics
 - `process_cpu_seconds_total`: Total user and system CPU time spent in seconds
@@ -62,9 +61,9 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 
 ## Usage
 
-1. Set up YouTube API key:
+1. Set one or more YouTube API keys (use multiple for load balancing):
     ```bash
-    export YOUTUBE_API_KEY="your_api_key_here"
+    export YOUTUBE_API_KEY="key1,key2,key3"
     ```
 
 2. (Optional) Set custom port:
@@ -163,7 +162,7 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 ## Configuration
 
 ### Environment Variables
-- `YOUTUBE_API_KEY` (required): YouTube Data API v3 key
+- `YOUTUBE_API_KEY` (required): YouTube Data API v3 key(s)
 - `PORT` (optional): Server port (default: 9473)
 - `LOG_LEVEL` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
 - `MODEL_CACHE_DIR` (optional): Custom directory for HuggingFace model cache to persist downloaded models between restarts
@@ -172,14 +171,14 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 
 ### Basic Deployment
 ```bash
-export YOUTUBE_API_KEY="your_api_key_here"
+export YOUTUBE_API_KEY="key1,key2,key3"
 export LOG_LEVEL="INFO"
 python main.py
 ```
 
 ### Deployment with Persistent Model Cache
 ```bash
-export YOUTUBE_API_KEY="your_api_key_here"
+export YOUTUBE_API_KEY="key1,key2,key3"
 export MODEL_CACHE_DIR="/opt/youtube-exporter/model-cache"
 export LOG_LEVEL="INFO"
 python main.py

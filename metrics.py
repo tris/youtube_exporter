@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 import time
 
 import psutil
@@ -11,11 +12,7 @@ from prometheus_client.registry import Collector
 
 import quota
 from api_errors import api_errors
-from entropy import (
-    calculate_spatial_entropy,
-    calculate_temporal_entropy,
-    fetch_two_spaced_frames,
-)
+from entropy import compute_entropy
 from object_detection import count_objects_in_video
 from youtube_client import (
     fetch_channel_details,
@@ -28,20 +25,35 @@ logger = logging.getLogger(__name__)
 # Global variables for metrics storage
 metrics_data = {}  # Key: video_id, Value: metrics dict
 channel_metrics_data = {}  # Key: channel_id, Value: channel metrics dict
+metrics_lock = (
+    threading.Lock()
+)  # Lock for thread-safe access to metrics_data and channel_metrics_data
 # Separate storage for entropy values that can be updated asynchronously
 entropy_data = (
     {}
 )  # Key: video_id, Value: {'spatial_entropy': dict|float, 'temporal_entropy': dict|float, 'timestamp': float}
+entropy_data_lock = (
+    threading.Lock()
+)  # Lock for thread-safe access to entropy_data
 # Separate storage for object detection results
 object_data = (
     {}
 )  # Key: f"{video_id}_{object_type}", Value: {'object_count': int, 'object_type': str, 'timestamp': float}
+object_data_lock = (
+    threading.Lock()
+)  # Lock for thread-safe access to object_data
 # Track active object detection tasks to prevent duplicates
 active_object_detection = (
     set()
 )  # Set of f"{video_id}_{object_type}" currently being processed
+active_detection_lock = (
+    threading.Lock()
+)  # Lock for thread-safe access to active_object_detection
 # Track active entropy computation tasks to prevent duplicates
 active_entropy_computation = set()  # Set of video_id currently being processed
+active_entropy_lock = (
+    threading.Lock()
+)  # Lock for thread-safe access to active_entropy_computation
 
 # Prometheus registry
 registry = CollectorRegistry()
@@ -147,22 +159,17 @@ class TimestampedMetricsCollector(Collector):
         )
 
         # Quota metrics
-        quota_family = GaugeMetricFamily(
-            "youtube_api_quota_units_today",
-            "Estimated YouTube Data API quota units consumed today, labeled by endpoint",
-            labels=["endpoint"],
-        )
         quota_total_family = CounterMetricFamily(
             "youtube_api_quota_units_total",
-            "Total YouTube Data API quota units consumed, labeled by endpoint",
-            labels=["endpoint"],
+            "Total YouTube Data API quota units consumed, labeled by endpoint and key",
+            labels=["endpoint", "key"],
         )
 
         # API errors metrics
         errors_family = CounterMetricFamily(
             "youtube_api_errors_total",
-            "Total YouTube API errors, labeled by error code and endpoint",
-            labels=["code", "endpoint"],
+            "Total YouTube API errors, labeled by error code, endpoint, and key",
+            labels=["code", "endpoint", "key"],
         )
 
         # Process metrics
@@ -189,21 +196,10 @@ class TimestampedMetricsCollector(Collector):
             for video_id, data in metrics_data.items():
                 processed_videos.add(video_id)
                 # Get title for metrics
-                title = (
-                    data.get("api_data", {}).get("title", "")
-                    if "api_data" in data
-                    else ""
-                )
-                # Fallback to title from entropy_data if api_data title is empty
-                if not title and video_id in entropy_data:
-                    title = entropy_data[video_id].get("title", "")
-                    if title:
-                        logger.info(
-                            f"Using fallback title from entropy_data for {video_id}: '{title}'"
-                        )
+                title = data.get("api_data", {}).get("title", "")
                 if not title:
                     logger.warning(
-                        f"Empty title for video {video_id} in entropy metrics collection"
+                        f"No title available for video {video_id}, suppressing metrics"
                     )
                     continue  # Suppress metrics for videos without title
 
@@ -211,81 +207,85 @@ class TimestampedMetricsCollector(Collector):
                 title = safe_label_value(title)
 
                 # Object count metrics from separate storage (emit all cached results)
-                for key, obj_info in object_data.items():
-                    if obj_info.get("video_id") == video_id:
-                        object_count_family.add_metric(
-                            [
-                                video_id,
-                                title,
-                                safe_label_value(obj_info["object_type"]),
-                            ],
-                            obj_info["object_count"],
-                            timestamp=obj_info["timestamp"],
-                        )
+                with object_data_lock:
+                    for key, obj_info in object_data.items():
+                        if obj_info.get("video_id") == video_id:
+                            object_count_family.add_metric(
+                                [
+                                    video_id,
+                                    title,
+                                    safe_label_value(obj_info["object_type"]),
+                                ],
+                                obj_info["object_count"],
+                                timestamp=obj_info["timestamp"],
+                            )
 
                 # Check for entropy data in separate storage
-                if video_id in entropy_data:
-                    entropy_info = entropy_data[video_id]
-                    entropy_timestamp = entropy_info.get(
-                        "timestamp", data["timestamp"]
-                    )
-                    if "spatial_entropy" in entropy_info:
-                        spatial_ent = entropy_info["spatial_entropy"]
-                        # HSV format
-                        if "hue" in spatial_ent:
-                            spatial_hue_family.add_metric(
-                                [video_id, title],
-                                spatial_ent["hue"],
-                                timestamp=entropy_timestamp,
-                            )
-                        if "saturation" in spatial_ent:
-                            spatial_saturation_family.add_metric(
-                                [video_id, title],
-                                spatial_ent["saturation"],
-                                timestamp=entropy_timestamp,
-                            )
-                        if "value" in spatial_ent:
-                            spatial_value_family.add_metric(
-                                [video_id, title],
-                                spatial_ent["value"],
-                                timestamp=entropy_timestamp,
-                            )
-                    if "temporal_entropy" in entropy_info:
-                        temporal_ent = entropy_info["temporal_entropy"]
-                        # HSV format
-                        if "hue" in temporal_ent:
-                            temporal_hue_family.add_metric(
-                                [video_id, title],
-                                temporal_ent["hue"],
-                                timestamp=entropy_timestamp,
-                            )
-                        if "saturation" in temporal_ent:
-                            temporal_saturation_family.add_metric(
-                                [video_id, title],
-                                temporal_ent["saturation"],
-                                timestamp=entropy_timestamp,
-                            )
-                        if "value" in temporal_ent:
-                            temporal_value_family.add_metric(
-                                [video_id, title],
-                                temporal_ent["value"],
-                                timestamp=entropy_timestamp,
-                            )
-                    if (
-                        "bitrate" in entropy_info
-                        and entropy_info["bitrate"] is not None
-                    ):
-                        bitrate_family.add_metric(
-                            [
-                                video_id,
-                                title,
-                                safe_label_value(
-                                    entropy_info.get("resolution", "unknown")
-                                ),
-                            ],
-                            entropy_info["bitrate"],
-                            timestamp=entropy_timestamp,
+                with entropy_data_lock:
+                    if video_id in entropy_data:
+                        entropy_info = entropy_data[video_id]
+                        entropy_timestamp = entropy_info.get(
+                            "timestamp", data["timestamp"]
                         )
+                        if "spatial_entropy" in entropy_info:
+                            spatial_ent = entropy_info["spatial_entropy"]
+                            # HSV format
+                            if "hue" in spatial_ent:
+                                spatial_hue_family.add_metric(
+                                    [video_id, title],
+                                    spatial_ent["hue"],
+                                    timestamp=entropy_timestamp,
+                                )
+                            if "saturation" in spatial_ent:
+                                spatial_saturation_family.add_metric(
+                                    [video_id, title],
+                                    spatial_ent["saturation"],
+                                    timestamp=entropy_timestamp,
+                                )
+                            if "value" in spatial_ent:
+                                spatial_value_family.add_metric(
+                                    [video_id, title],
+                                    spatial_ent["value"],
+                                    timestamp=entropy_timestamp,
+                                )
+                        if "temporal_entropy" in entropy_info:
+                            temporal_ent = entropy_info["temporal_entropy"]
+                            # HSV format
+                            if "hue" in temporal_ent:
+                                temporal_hue_family.add_metric(
+                                    [video_id, title],
+                                    temporal_ent["hue"],
+                                    timestamp=entropy_timestamp,
+                                )
+                            if "saturation" in temporal_ent:
+                                temporal_saturation_family.add_metric(
+                                    [video_id, title],
+                                    temporal_ent["saturation"],
+                                    timestamp=entropy_timestamp,
+                                )
+                            if "value" in temporal_ent:
+                                temporal_value_family.add_metric(
+                                    [video_id, title],
+                                    temporal_ent["value"],
+                                    timestamp=entropy_timestamp,
+                                )
+                        if (
+                            "bitrate" in entropy_info
+                            and entropy_info["bitrate"] is not None
+                        ):
+                            bitrate_family.add_metric(
+                                [
+                                    video_id,
+                                    title,
+                                    safe_label_value(
+                                        entropy_info.get(
+                                            "resolution", "unknown"
+                                        )
+                                    ),
+                                ],
+                                entropy_info["bitrate"],
+                                timestamp=entropy_timestamp,
+                            )
 
                 # YouTube API metrics
                 if "api_data" in data:
@@ -392,24 +392,25 @@ class TimestampedMetricsCollector(Collector):
                         ]
 
                         # Check for entropy data in the separate entropy_data storage
-                        has_entropy = stream_video_id in entropy_data
-                        if has_entropy:
-                            entropy_info = entropy_data[stream_video_id]
-                            spatial_ent = entropy_info.get(
-                                "spatial_entropy", {}
-                            )
-                            temporal_ent = entropy_info.get(
-                                "temporal_entropy", {}
-                            )
-                            spatial_log = f"hue={spatial_ent.get('hue', 0):.2f}, sat={spatial_ent.get('saturation', 0):.2f}, val={spatial_ent.get('value', 0):.2f}"
-                            temporal_log = f"hue={temporal_ent.get('hue', 0):.2f}, sat={temporal_ent.get('saturation', 0):.2f}, val={temporal_ent.get('value', 0):.2f}"
-                            logger.info(
-                                f"Found entropy data for {stream_video_id}: spatial=({spatial_log}), temporal=({temporal_log})"
-                            )
-                        else:
-                            logger.debug(
-                                f"No entropy data yet for {stream_video_id}"
-                            )
+                        with entropy_data_lock:
+                            has_entropy = stream_video_id in entropy_data
+                            if has_entropy:
+                                entropy_info = entropy_data[stream_video_id]
+                                spatial_ent = entropy_info.get(
+                                    "spatial_entropy", {}
+                                )
+                                temporal_ent = entropy_info.get(
+                                    "temporal_entropy", {}
+                                )
+                                spatial_log = f"hue={spatial_ent.get('hue', 0):.2f}, sat={spatial_ent.get('saturation', 0):.2f}, val={spatial_ent.get('value', 0):.2f}"
+                                temporal_log = f"hue={temporal_ent.get('hue', 0):.2f}, sat={temporal_ent.get('saturation', 0):.2f}, val={temporal_ent.get('value', 0):.2f}"
+                                logger.info(
+                                    f"Found entropy data for {stream_video_id}: spatial=({spatial_log}), temporal=({temporal_log})"
+                                )
+                            else:
+                                logger.debug(
+                                    f"No entropy data yet for {stream_video_id}"
+                                )
 
                         view_family.add_metric(
                             stream_labels,
@@ -433,92 +434,98 @@ class TimestampedMetricsCollector(Collector):
                         )
 
                         # Add entropy metrics from separate storage if available
-                        if stream_video_id in entropy_data:
-                            entropy_info = entropy_data[stream_video_id]
-                            entropy_timestamp = entropy_info.get(
-                                "timestamp", channel_data["timestamp"]
-                            )
-                            if "spatial_entropy" in entropy_info:
-                                spatial_ent = entropy_info["spatial_entropy"]
-                                # HSV format
-                                if "hue" in spatial_ent:
-                                    spatial_hue_family.add_metric(
-                                        stream_labels,
-                                        spatial_ent["hue"],
-                                        timestamp=entropy_timestamp,
-                                    )
-                                if "saturation" in spatial_ent:
-                                    spatial_saturation_family.add_metric(
-                                        stream_labels,
-                                        spatial_ent["saturation"],
-                                        timestamp=entropy_timestamp,
-                                    )
-                                if "value" in spatial_ent:
-                                    spatial_value_family.add_metric(
-                                        stream_labels,
-                                        spatial_ent["value"],
-                                        timestamp=entropy_timestamp,
-                                    )
-                            if "temporal_entropy" in entropy_info:
-                                temporal_ent = entropy_info["temporal_entropy"]
-                                # HSV format
-                                if "hue" in temporal_ent:
-                                    temporal_hue_family.add_metric(
-                                        stream_labels,
-                                        temporal_ent["hue"],
-                                        timestamp=entropy_timestamp,
-                                    )
-                                if "saturation" in temporal_ent:
-                                    temporal_saturation_family.add_metric(
-                                        stream_labels,
-                                        temporal_ent["saturation"],
-                                        timestamp=entropy_timestamp,
-                                    )
-                                if "value" in temporal_ent:
-                                    temporal_value_family.add_metric(
-                                        stream_labels,
-                                        temporal_ent["value"],
-                                        timestamp=entropy_timestamp,
-                                    )
-                            if (
-                                "bitrate" in entropy_info
-                                and entropy_info["bitrate"] is not None
-                            ):
-                                logger.info(
-                                    f"Adding bitrate metric for {stream_video_id}: {entropy_info['bitrate']}"
+                        with entropy_data_lock:
+                            if stream_video_id in entropy_data:
+                                entropy_info = entropy_data[stream_video_id]
+                                entropy_timestamp = entropy_info.get(
+                                    "timestamp", channel_data["timestamp"]
                                 )
-                                bitrate_family.add_metric(
-                                    [
-                                        stream_video_id,
-                                        safe_label_value(
-                                            stream.get("title", "")
-                                        ),
-                                        safe_label_value(
-                                            entropy_info.get(
-                                                "resolution", "unknown"
-                                            )
-                                        ),
-                                    ],
-                                    entropy_info["bitrate"],
-                                    timestamp=entropy_timestamp,
-                                )
+                                if "spatial_entropy" in entropy_info:
+                                    spatial_ent = entropy_info[
+                                        "spatial_entropy"
+                                    ]
+                                    # HSV format
+                                    if "hue" in spatial_ent:
+                                        spatial_hue_family.add_metric(
+                                            stream_labels,
+                                            spatial_ent["hue"],
+                                            timestamp=entropy_timestamp,
+                                        )
+                                    if "saturation" in spatial_ent:
+                                        spatial_saturation_family.add_metric(
+                                            stream_labels,
+                                            spatial_ent["saturation"],
+                                            timestamp=entropy_timestamp,
+                                        )
+                                    if "value" in spatial_ent:
+                                        spatial_value_family.add_metric(
+                                            stream_labels,
+                                            spatial_ent["value"],
+                                            timestamp=entropy_timestamp,
+                                        )
+                                if "temporal_entropy" in entropy_info:
+                                    temporal_ent = entropy_info[
+                                        "temporal_entropy"
+                                    ]
+                                    # HSV format
+                                    if "hue" in temporal_ent:
+                                        temporal_hue_family.add_metric(
+                                            stream_labels,
+                                            temporal_ent["hue"],
+                                            timestamp=entropy_timestamp,
+                                        )
+                                    if "saturation" in temporal_ent:
+                                        temporal_saturation_family.add_metric(
+                                            stream_labels,
+                                            temporal_ent["saturation"],
+                                            timestamp=entropy_timestamp,
+                                        )
+                                    if "value" in temporal_ent:
+                                        temporal_value_family.add_metric(
+                                            stream_labels,
+                                            temporal_ent["value"],
+                                            timestamp=entropy_timestamp,
+                                        )
+                                if (
+                                    "bitrate" in entropy_info
+                                    and entropy_info["bitrate"] is not None
+                                ):
+                                    logger.info(
+                                        f"Adding bitrate metric for {stream_video_id}: {entropy_info['bitrate']}"
+                                    )
+                                    bitrate_family.add_metric(
+                                        [
+                                            stream_video_id,
+                                            safe_label_value(
+                                                stream.get("title", "")
+                                            ),
+                                            safe_label_value(
+                                                entropy_info.get(
+                                                    "resolution", "unknown"
+                                                )
+                                            ),
+                                        ],
+                                        entropy_info["bitrate"],
+                                        timestamp=entropy_timestamp,
+                                    )
 
                         # Add object detection metrics from separate storage if available
-                        for key, obj_info in object_data.items():
-                            if obj_info.get("video_id") == stream_video_id:
-                                object_count_family.add_metric(
-                                    [
-                                        stream_video_id,
-                                        safe_label_value(
-                                            stream.get("title", "")
-                                        ),
-                                        safe_label_value(
-                                            obj_info["object_type"]
-                                        ),
-                                    ],
-                                    obj_info["object_count"],
-                                    timestamp=obj_info["timestamp"],
-                                )
+                        with object_data_lock:
+                            for key, obj_info in object_data.items():
+                                if obj_info.get("video_id") == stream_video_id:
+                                    object_count_family.add_metric(
+                                        [
+                                            stream_video_id,
+                                            safe_label_value(
+                                                stream.get("title", "")
+                                            ),
+                                            safe_label_value(
+                                                obj_info["object_type"]
+                                            ),
+                                        ],
+                                        obj_info["object_count"],
+                                        timestamp=obj_info["timestamp"],
+                                    )
                                 logger.debug(
                                     f"Adding object_count metric for {stream_video_id}: {obj_info['object_count']} '{obj_info['object_type']}' objects"
                                 )
@@ -538,15 +545,14 @@ class TimestampedMetricsCollector(Collector):
                         )
 
         # Process quota metrics
-        for endpoint, units in quota.api_quota_used.items():
-            quota_family.add_metric([endpoint], units)
-
-        for endpoint, units in quota.api_quota_total.items():
-            quota_total_family.add_metric([endpoint], units)
+        for (key_index, endpoint), units in quota.api_quota_total.items():
+            quota_total_family.add_metric([endpoint, str(key_index)], units)
 
         # Process API errors metrics
-        for (code, endpoint), count in api_errors.items():
-            errors_family.add_metric([str(code), endpoint], count)
+        for (key_index, code, endpoint), count in api_errors.items():
+            errors_family.add_metric(
+                [str(code), endpoint, str(key_index)], count
+            )
 
         # Process metrics
         try:
@@ -580,7 +586,6 @@ class TimestampedMetricsCollector(Collector):
         yield channel_view_family
         yield channel_video_family
         yield channel_scrape_success_family
-        yield quota_family
         yield quota_total_family
         yield errors_family
         yield process_cpu_family
@@ -626,66 +631,38 @@ def process_channel_data(channel, live_videos, fetch_images=True):
 
 
 def compute_and_store_entropy(video_id, title=None, max_height=None):
-    """Compute entropy for a video and store it in the global entropy_data.
+    """Compute entropy for a video using entropy.py and store results in global entropy_data.
     Returns the high-resolution frame for potential reuse in object detection.
     """
-    global entropy_data, active_entropy_computation
+    global entropy_data, active_entropy_computation, entropy_data_lock
 
     try:
-        logger.info(f"Computing entropy for video {video_id}, title='{title}'")
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(
-            url, max_height=max_height
-        )
-
-        if frame1 is not None and frame2 is not None:
-            # Calculate color-aware spatial-entropy using the second frame
-            spatial_entropy = calculate_spatial_entropy(frame2)
-            # Calculate color-aware temporal-entropy between the two spaced frames
-            temporal_entropy = calculate_temporal_entropy(frame2, frame1)
-
-            entropy_data[video_id] = {
-                "spatial_entropy": spatial_entropy,
-                "temporal_entropy": temporal_entropy,
-                "bitrate": bitrate,
-                "resolution": resolution,
-                "timestamp": time.time(),
-                "reusable_frame": frame2,  # Store high-res frame for object detection reuse
-                "title": title,  # Store title to prevent race conditions
-            }
-
-            bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
-            # Log entropy values (handle both dict and float formats)
-            if isinstance(spatial_entropy, dict):
-                spatial_log = f"hue={spatial_entropy.get('hue', 0):.2f}, sat={spatial_entropy.get('saturation', 0):.2f}, val={spatial_entropy.get('value', 0):.2f}"
-            else:
-                spatial_log = f"{spatial_entropy:.2f}"
-            if isinstance(temporal_entropy, dict):
-                temporal_log = f"hue={temporal_entropy.get('hue', 0):.2f}, sat={temporal_entropy.get('saturation', 0):.2f}, val={temporal_entropy.get('value', 0):.2f}"
-            else:
-                temporal_log = f"{temporal_entropy:.2f}"
-            logger.info(
-                f"Stored HSV entropy for {video_id}: spatial=({spatial_log}), temporal=({temporal_log}), bitrate={bitrate_str} bps, resolution={resolution}"
-            )
-            # Return averaged values
-            spatial_avg = sum(spatial_entropy.values()) / len(spatial_entropy)
-            temporal_avg = sum(temporal_entropy.values()) / len(
-                temporal_entropy
+        # Compute entropy using the dedicated entropy module
+        result = compute_entropy(video_id, max_height)
+        if result and len(result) == 5:
+            spatial_entropy, temporal_entropy, bitrate, resolution, frame2 = (
+                result
             )
 
-            return (
-                spatial_avg,
-                temporal_avg,
-                bitrate,
-                resolution,
-                frame2,
-            )
+            # Store results in global data structure
+            with entropy_data_lock:
+                entropy_data[video_id] = {
+                    "spatial_entropy": spatial_entropy,  # Store full HSV dict for metrics
+                    "temporal_entropy": temporal_entropy,
+                    "bitrate": bitrate,
+                    "resolution": resolution,
+                    "timestamp": time.time(),
+                    "reusable_frame": frame2,  # Store high-res frame for object detection reuse
+                }
+
+            return result
         else:
-            logger.warning(f"Failed to fetch frames for {video_id}")
+            logger.warning(f"Entropy computation failed for {video_id}")
             return None, None, None, None, None
     finally:
         # Always remove from active set when done (success or failure)
-        active_entropy_computation.discard(video_id)
+        with active_entropy_lock:
+            active_entropy_computation.discard(video_id)
 
 
 def compute_and_store_objects(video_id, object_type, max_height=None):
@@ -702,36 +679,38 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
 
         # Check if we have a reusable high-resolution frame from recent entropy calculation
         reuse_frame = None
-        if video_id in entropy_data:
-            entropy_info = entropy_data[video_id]
-            frame_age = time.time() - entropy_info.get("timestamp", 0)
-            if (
-                frame_age < 300 and "reusable_frame" in entropy_info
-            ):  # Use frame if < 5 minutes old
-                reuse_frame = entropy_info["reusable_frame"]
-                logger.debug(
-                    f"Reusing high-resolution frame from entropy calculation (age: {frame_age:.0f}s)"
-                )
+        with entropy_data_lock:
+            if video_id in entropy_data:
+                entropy_info = entropy_data[video_id]
+                frame_age = time.time() - entropy_info.get("timestamp", 0)
+                if (
+                    frame_age < 300 and "reusable_frame" in entropy_info
+                ):  # Use frame if < 5 minutes old
+                    reuse_frame = entropy_info["reusable_frame"]
+                    logger.debug(
+                        f"Reusing high-resolution frame from entropy calculation (age: {frame_age:.0f}s)"
+                    )
+                else:
+                    logger.debug(
+                        f"Cannot reuse frame - age: {frame_age:.0f}s, has_frame: {'reusable_frame' in entropy_info}"
+                    )
             else:
                 logger.debug(
-                    f"Cannot reuse frame - age: {frame_age:.0f}s, has_frame: {'reusable_frame' in entropy_info}"
+                    f"No entropy data available for {video_id}, will capture new frame"
                 )
-        else:
-            logger.debug(
-                f"No entropy data available for {video_id}, will capture new frame"
-            )
 
         object_count = count_objects_in_video(
             video_id, object_type, max_height, reuse_frame=reuse_frame
         )
 
         if object_count is not None:
-            object_data[key] = {
-                "object_count": object_count,
-                "object_type": object_type,
-                "video_id": video_id,
-                "timestamp": time.time(),
-            }
+            with object_data_lock:
+                object_data[key] = {
+                    "object_count": object_count,
+                    "object_type": object_type,
+                    "video_id": video_id,
+                    "timestamp": time.time(),
+                }
             logger.info(
                 f"Stored object detection for {video_id}: {object_count} '{object_type}' objects"
             )
@@ -747,7 +726,8 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
         return None
     finally:
         # Always remove from active set when done (success or failure)
-        active_object_detection.discard(key)
+        with active_detection_lock:
+            active_object_detection.discard(key)
 
 
 def process_video_data_for_channel(video, fetch_images=True):
@@ -826,16 +806,17 @@ def update_channel_metrics(
     )
 
     # Store channel metrics
-    channel_metrics_data[channel_id] = {
-        "channel_info": {
-            "title": channel_snapshot["title"],
-            "subscriber_count": channel_snapshot["subscriber_count"],
-            "view_count": channel_snapshot["view_count"],
-            "video_count": channel_snapshot["video_count"],
-        },
-        "live_streams": channel_snapshot["live_streams"],
-        "timestamp": timestamp,
-    }
+    with metrics_lock:
+        channel_metrics_data[channel_id] = {
+            "channel_info": {
+                "title": channel_snapshot["title"],
+                "subscriber_count": channel_snapshot["subscriber_count"],
+                "view_count": channel_snapshot["view_count"],
+                "video_count": channel_snapshot["video_count"],
+            },
+            "live_streams": channel_snapshot["live_streams"],
+            "timestamp": timestamp,
+        }
 
     # If fetch_images is True, kick off background entropy computation for live streams
     if fetch_images and not disable_live:
@@ -845,17 +826,18 @@ def update_channel_metrics(
             video_id = stream.get("video_id")
             if video_id and stream.get("live_binary") == 1:
                 # Check if we already have recent entropy data
-                if video_id in entropy_data:
-                    age = time.time() - entropy_data[video_id].get(
-                        "timestamp", 0
-                    )
-                    if (
-                        age < 300
-                    ):  # Skip if entropy was computed in last 5 minutes
-                        logger.debug(
-                            f"Skipping entropy computation for {video_id}, data is {age:.0f}s old"
+                with entropy_data_lock:
+                    if video_id in entropy_data:
+                        age = time.time() - entropy_data[video_id].get(
+                            "timestamp", 0
                         )
-                        continue
+                        if (
+                            age < 300
+                        ):  # Skip if entropy was computed in last 5 minutes
+                            logger.debug(
+                                f"Skipping entropy computation for {video_id}, data is {age:.0f}s old"
+                            )
+                            continue
 
                 # Check if entropy computation is already in progress
                 if video_id in active_entropy_computation:
@@ -868,7 +850,8 @@ def update_channel_metrics(
                 logger.info(
                     f"Starting background entropy computation for {video_id}"
                 )
-                active_entropy_computation.add(video_id)
+                with active_entropy_lock:
+                    active_entropy_computation.add(video_id)
                 thread = threading.Thread(
                     target=compute_and_store_entropy,
                     args=(video_id, stream.get("title"), None),
@@ -885,19 +868,20 @@ def update_channel_metrics(
             if video_id and stream.get("live_binary") == 1:
                 # Object counting mode - check if we need to start background detection
                 key = f"{video_id}_{match}"
-                if key in object_data:
-                    stored_data = object_data[key]
-                    # Check if existing data is recent enough
-                    age = time.time() - stored_data.get("timestamp", 0)
-                    if age < 300:  # Use existing data if recent
-                        logger.debug(
-                            f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old"
-                        )
-                        continue
-                    else:
-                        logger.debug(
-                            f"Existing object data is stale (age: {age:.0f}s), will recompute"
-                        )
+                with object_data_lock:
+                    if key in object_data:
+                        stored_data = object_data[key]
+                        # Check if existing data is recent enough
+                        age = time.time() - stored_data.get("timestamp", 0)
+                        if age < 300:  # Use existing data if recent
+                            logger.debug(
+                                f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old"
+                            )
+                            continue
+                        else:
+                            logger.debug(
+                                f"Existing object data is stale (age: {age:.0f}s), will recompute"
+                            )
 
                 # Check if detection is already in progress (with thread-safe add)
                 if key in active_object_detection:
@@ -907,7 +891,8 @@ def update_channel_metrics(
                     continue
 
                 # Add to active set BEFORE starting thread to prevent race conditions
-                active_object_detection.add(key)
+                with active_detection_lock:
+                    active_object_detection.add(key)
                 logger.info(
                     f"Starting object detection for {video_id}, object_type: {match}"
                 )
@@ -926,11 +911,12 @@ def update_channel_metrics(
                 thread.start()
 
     # Log status
-    entropy_count = sum(
-        1
-        for stream in channel_snapshot["live_streams"]
-        if stream.get("video_id") in entropy_data
-    )
+    with entropy_data_lock:
+        entropy_count = sum(
+            1
+            for stream in channel_snapshot["live_streams"]
+            if stream.get("video_id") in entropy_data
+        )
     logger.info(
         f"Updated channel metrics for {channel_id}: {len(live_videos)} live streams, {entropy_count} with existing entropy data"
     )
@@ -982,18 +968,21 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 channel_snapshot = process_channel_data(
                     channel_data, [], False
                 )  # No live streams for video requests, no image fetching
-                channel_metrics_data[channel_id] = {
-                    "channel_info": {
-                        "title": safe_label_value(channel_snapshot["title"]),
-                        "subscriber_count": channel_snapshot[
-                            "subscriber_count"
-                        ],
-                        "view_count": channel_snapshot["view_count"],
-                        "video_count": channel_snapshot["video_count"],
-                    },
-                    "live_streams": [],
-                    "timestamp": timestamp,
-                }
+                with metrics_lock:
+                    channel_metrics_data[channel_id] = {
+                        "channel_info": {
+                            "title": safe_label_value(
+                                channel_snapshot["title"]
+                            ),
+                            "subscriber_count": channel_snapshot[
+                                "subscriber_count"
+                            ],
+                            "view_count": channel_snapshot["view_count"],
+                            "video_count": channel_snapshot["video_count"],
+                        },
+                        "live_streams": [],
+                        "timestamp": timestamp,
+                    }
                 logger.info(
                     f"Fetched channel info for {channel_id} from video {video_id}"
                 )
@@ -1017,24 +1006,52 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
         }
 
     # Store API data
-    metrics_data[video_id] = {"api_data": api_data, "timestamp": timestamp}
+    with metrics_lock:
+        metrics_data[video_id] = {"api_data": api_data, "timestamp": timestamp}
 
     # Handle entropy computation and object counting
     if fetch_images:
         # Check if we already have recent entropy data
-        if video_id in entropy_data:
-            age = time.time() - entropy_data[video_id].get("timestamp", 0)
-            if age < 300:  # Skip if entropy was computed in last 5 minutes
-                logger.debug(
-                    f"Using existing entropy data for {video_id}, data is {age:.0f}s old"
-                )
-                # Copy entropy data to metrics_data
-                spatial_ent = entropy_data[video_id].get("spatial_entropy", {})
-                temporal_ent = entropy_data[video_id].get(
-                    "temporal_entropy", {}
-                )
-                metrics_data[video_id]["spatial_entropy"] = spatial_ent
-                metrics_data[video_id]["temporal_entropy"] = temporal_ent
+        with entropy_data_lock:
+            if video_id in entropy_data:
+                age = time.time() - entropy_data[video_id].get("timestamp", 0)
+                if age < 300:  # Skip if entropy was computed in last 5 minutes
+                    logger.debug(
+                        f"Using existing entropy data for {video_id}, data is {age:.0f}s old"
+                    )
+                    # Copy entropy data to metrics_data
+                    spatial_ent = entropy_data[video_id].get(
+                        "spatial_entropy", {}
+                    )
+                    temporal_ent = entropy_data[video_id].get(
+                        "temporal_entropy", {}
+                    )
+                    with metrics_lock:
+                        metrics_data[video_id]["spatial_entropy"] = spatial_ent
+                        metrics_data[video_id][
+                            "temporal_entropy"
+                        ] = temporal_ent
+                else:
+                    # Check if entropy computation is already in progress
+                    if video_id in active_entropy_computation:
+                        logger.debug(
+                            f"Entropy computation already in progress for {video_id}"
+                        )
+                    else:
+                        # Start background entropy computation for individual video requests too
+                        logger.info(
+                            f"Starting background entropy computation for {video_id}"
+                        )
+                        with active_entropy_lock:
+                            active_entropy_computation.add(video_id)
+                        import threading
+
+                        thread = threading.Thread(
+                            target=compute_and_store_entropy,
+                            args=(video_id, api_data.get("title"), max_height),
+                            daemon=True,
+                        )
+                        thread.start()
             else:
                 # Check if entropy computation is already in progress
                 if video_id in active_entropy_computation:
@@ -1046,7 +1063,8 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                     logger.info(
                         f"Starting background entropy computation for {video_id}"
                     )
-                    active_entropy_computation.add(video_id)
+                    with active_entropy_lock:
+                        active_entropy_computation.add(video_id)
                     import threading
 
                     thread = threading.Thread(
@@ -1055,26 +1073,6 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                         daemon=True,
                     )
                     thread.start()
-        else:
-            # Check if entropy computation is already in progress
-            if video_id in active_entropy_computation:
-                logger.debug(
-                    f"Entropy computation already in progress for {video_id}"
-                )
-            else:
-                # Start background entropy computation for individual video requests too
-                logger.info(
-                    f"Starting background entropy computation for {video_id}"
-                )
-                active_entropy_computation.add(video_id)
-                import threading
-
-                thread = threading.Thread(
-                    target=compute_and_store_entropy,
-                    args=(video_id, api_data.get("title"), max_height),
-                    daemon=True,
-                )
-                thread.start()
 
         # If match is provided, also do object detection
         if match:
@@ -1083,19 +1081,20 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             )
             # Object counting mode - check if we need to start background detection
             key = f"{video_id}_{match}"
-            if key in object_data:
-                stored_data = object_data[key]
-                # Check if existing data is recent enough
-                age = time.time() - stored_data.get("timestamp", 0)
-                if age < 300:  # Use existing data if recent
-                    logger.debug(
-                        f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old"
-                    )
-                    return
-                else:
-                    logger.debug(
-                        f"Existing object data is stale (age: {age:.0f}s), will recompute"
-                    )
+            with object_data_lock:
+                if key in object_data:
+                    stored_data = object_data[key]
+                    # Check if existing data is recent enough
+                    age = time.time() - stored_data.get("timestamp", 0)
+                    if age < 300:  # Use existing data if recent
+                        logger.debug(
+                            f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old"
+                        )
+                        return
+                    else:
+                        logger.debug(
+                            f"Existing object data is stale (age: {age:.0f}s), will recompute"
+                        )
 
             # Check if detection is already in progress (with thread-safe add)
             if key in active_object_detection:
@@ -1105,7 +1104,8 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 return
 
             # Add to active set BEFORE starting thread to prevent race conditions
-            active_object_detection.add(key)
+            with active_detection_lock:
+                active_object_detection.add(key)
             logger.info(
                 f"Starting object detection for {video_id}, object_type: {match}"
             )

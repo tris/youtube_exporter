@@ -13,37 +13,48 @@ from config import (
     MAX_RESULTS,
     YOUTUBE_API_KEY,
 )
-from quota import add_quota_units, check_quota_reset
+from quota import add_quota_units
 
 logger = logging.getLogger(__name__)
 
-# Global YouTube service instance
-youtube_service = None
+# Global YouTube service instances (one per key)
+youtube_services = {}
+current_key_index = 0
 
 
 def get_youtube_service():
-    """Get or create YouTube API service."""
-    global youtube_service
-    if youtube_service is None and YOUTUBE_API_KEY:
+    """Get or create YouTube API service with load balancing."""
+    global youtube_services, current_key_index
+    if not YOUTUBE_API_KEY:
+        return None
+
+    # Round-robin selection
+    key_index = current_key_index
+    current_key_index = (current_key_index + 1) % len(YOUTUBE_API_KEY)
+
+    if key_index not in youtube_services:
         try:
-            youtube_service = build(
-                "youtube", "v3", developerKey=YOUTUBE_API_KEY
+            youtube_services[key_index] = build(
+                "youtube", "v3", developerKey=YOUTUBE_API_KEY[key_index]
             )
-            logger.info("YouTube API service initialized")
+            logger.info(f"YouTube API service initialized for key {key_index}")
         except Exception as e:
-            logger.error(f"Failed to initialize YouTube API service: {e}")
-    return youtube_service
+            logger.error(
+                f"Failed to initialize YouTube API service for key {key_index}: {e}"
+            )
+            return None
+
+    return youtube_services[key_index], key_index
 
 
 def fetch_video_details(video_id, retries=2):
     """Fetch video details from YouTube API with retry logic."""
-    logger.debug(f"Calling check_quota_reset for video {video_id}")
-    check_quota_reset()  # Check for daily reset
 
-    service = get_youtube_service()
-    if not service:
+    service_result = get_youtube_service()
+    if not service_result:
         logger.error("YouTube API service not available")
         return None
+    service, key_index = service_result
 
     for attempt in range(retries + 1):
         try:
@@ -53,7 +64,7 @@ def fetch_video_details(video_id, retries=2):
             response = request.execute()
 
             # Track quota usage
-            add_quota_units("videos.list")
+            add_quota_units("videos.list", key_index)
 
             if not response.get("items"):
                 return None
@@ -71,7 +82,7 @@ def fetch_video_details(video_id, retries=2):
             )
             code = e.resp.status
             endpoint = "videos.list"
-            key = (code, endpoint)
+            key = (key_index, code, endpoint)
             api_errors[key] = api_errors.get(key, 0) + 1
             if attempt < retries and code in [
                 500,
@@ -98,9 +109,10 @@ def fetch_video_details(video_id, retries=2):
 
 def fetch_channel_details(channel_id):
     """Fetch channel details from YouTube API."""
-    service = get_youtube_service()
-    if not service:
+    service_result = get_youtube_service()
+    if not service_result:
         return None
+    service, key_index = service_result
 
     try:
         request = service.channels().list(
@@ -109,7 +121,7 @@ def fetch_channel_details(channel_id):
         response = request.execute()
 
         # Track quota usage
-        add_quota_units("channels.list")
+        add_quota_units("channels.list", key_index)
 
         if not response.get("items"):
             return None
@@ -119,7 +131,7 @@ def fetch_channel_details(channel_id):
         logger.error(f"YouTube API error for channel {channel_id}: {e}")
         code = e.resp.status
         endpoint = "channels.list"
-        key = (code, endpoint)
+        key = (key_index, code, endpoint)
         api_errors[key] = api_errors.get(key, 0) + 1
         return None
     except Exception as e:
@@ -132,9 +144,10 @@ def refresh_cached_videos(cached_ids):
     if not cached_ids:
         return [], set()
 
-    service = get_youtube_service()
-    if not service:
+    service_result = get_youtube_service()
+    if not service_result:
         return [], set()
+    service, key_index = service_result
 
     still_live_videos = []
     still_live_ids = set()
@@ -151,7 +164,7 @@ def refresh_cached_videos(cached_ids):
             response = request.execute()
 
             # Track quota usage
-            add_quota_units("videos.list")
+            add_quota_units("videos.list", key_index)
 
             # Check which are still live
             for video in response.get("items", []):
@@ -166,7 +179,7 @@ def refresh_cached_videos(cached_ids):
             )
             code = e.resp.status
             endpoint = "videos.list"
-            key = (code, endpoint)
+            key = (key_index, code, endpoint)
             api_errors[key] = api_errors.get(key, 0) + 1
         except Exception as e:
             logger.error(
@@ -182,9 +195,10 @@ def fetch_channel_live_streams_comprehensive(channel_id):
         f"Performing comprehensive live stream search for channel {channel_id} (100 units)"
     )
 
-    service = get_youtube_service()
-    if not service:
+    service_result = get_youtube_service()
+    if not service_result:
         return []
+    service, key_index = service_result
 
     try:
         search_request = service.search().list(
@@ -197,7 +211,7 @@ def fetch_channel_live_streams_comprehensive(channel_id):
         search_response = search_request.execute()
 
         # Track quota usage
-        add_quota_units("search.list")
+        add_quota_units("search.list", key_index)
 
         if not search_response.get("items"):
             return []
@@ -219,7 +233,7 @@ def fetch_channel_live_streams_comprehensive(channel_id):
         videos_response = videos_request.execute()
 
         # Track quota usage
-        add_quota_units("videos.list")
+        add_quota_units("videos.list", key_index)
 
         return videos_response.get("items", [])
 
@@ -229,7 +243,7 @@ def fetch_channel_live_streams_comprehensive(channel_id):
         )
         code = e.resp.status
         endpoint = "search.list"  # Assuming it's the search call that failed
-        key = (code, endpoint)
+        key = (key_index, code, endpoint)
         api_errors[key] = api_errors.get(key, 0) + 1
         return []
     except Exception as e:
@@ -248,9 +262,10 @@ def fetch_recent_channel_videos(channel):
     if not uploads_playlist_id:
         return []
 
-    service = get_youtube_service()
-    if not service:
+    service_result = get_youtube_service()
+    if not service_result:
         return []
+    service, key_index = service_result
 
     try:
         # Fetch recent videos from uploads playlist
@@ -262,7 +277,7 @@ def fetch_recent_channel_videos(channel):
         playlist_response = playlist_request.execute()
 
         # Track quota usage
-        add_quota_units("playlistItems.list")
+        add_quota_units("playlistItems.list", key_index)
 
         video_ids = []
         for item in playlist_response.get("items", []):
@@ -285,7 +300,7 @@ def fetch_recent_channel_videos(channel):
                 videos_response = videos_request.execute()
 
                 # Track quota usage
-                add_quota_units("videos.list")
+                add_quota_units("videos.list", key_index)
 
                 # Filter for live videos
                 for video in videos_response.get("items", []):
@@ -298,7 +313,7 @@ def fetch_recent_channel_videos(channel):
                 )
                 code = e.resp.status
                 endpoint = "videos.list"
-                key = (code, endpoint)
+                key = (key_index, code, endpoint)
                 api_errors[key] = api_errors.get(key, 0) + 1
 
         return live_videos
@@ -309,7 +324,7 @@ def fetch_recent_channel_videos(channel):
         )
         code = e.resp.status
         endpoint = "playlistItems.list"
-        key = (code, endpoint)
+        key = (key_index, code, endpoint)
         api_errors[key] = api_errors.get(key, 0) + 1
         return []
     except Exception as e:

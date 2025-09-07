@@ -1,3 +1,3 @@
 """API errors tracking module."""
 
-api_errors = {}  # Key: (code, endpoint), Value: count
+api_errors = {}  # Key: (key_index, code, endpoint), Value: count

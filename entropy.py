@@ -380,3 +380,47 @@ def fetch_two_spaced_frames(
     except Exception as e:
         logger.error(f"Unexpected error fetching frames from {url}: {e}")
     return None, None, bitrate, None
+
+
+def compute_entropy(video_id, max_height=None):
+    """Compute entropy for a video and return the results.
+
+    This is the core entropy computation logic that was extracted from
+    compute_and_store_entropy() to separate concerns.
+    """
+    logger.info(f"Computing entropy for video {video_id}")
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(
+        url, max_height=max_height
+    )
+
+    if frame1 is not None and frame2 is not None:
+        # Calculate color-aware spatial-entropy using the second frame
+        spatial_entropy = calculate_spatial_entropy(frame2)
+        # Calculate color-aware temporal-entropy between the two spaced frames
+        temporal_entropy = calculate_temporal_entropy(frame2, frame1)
+
+        bitrate_str = f"{bitrate:.0f}" if bitrate is not None else "N/A"
+        # Log entropy values (handle both dict and float formats)
+        if isinstance(spatial_entropy, dict):
+            spatial_log = f"hue={spatial_entropy.get('hue', 0):.2f}, sat={spatial_entropy.get('saturation', 0):.2f}, val={spatial_entropy.get('value', 0):.2f}"
+        else:
+            spatial_log = f"{spatial_entropy:.2f}"
+        if isinstance(temporal_entropy, dict):
+            temporal_log = f"hue={temporal_entropy.get('hue', 0):.2f}, sat={temporal_entropy.get('saturation', 0):.2f}, val={temporal_entropy.get('value', 0):.2f}"
+        else:
+            temporal_log = f"{temporal_entropy:.2f}"
+        logger.info(
+            f"Computed HSV entropy for {video_id}: spatial=({spatial_log}), temporal=({temporal_log}), bitrate={bitrate_str} bps, resolution={resolution}"
+        )
+
+        return (
+            spatial_entropy,
+            temporal_entropy,
+            bitrate,
+            resolution,
+            frame2,
+        )
+    else:
+        logger.warning(f"Failed to fetch frames for {video_id}")
+        return None, None, None, None, None
