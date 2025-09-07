@@ -22,6 +22,9 @@ from youtube_client import (
 
 logger = logging.getLogger(__name__)
 
+# Metrics expiration time in seconds (10 minutes)
+METRICS_EXPIRATION_SECONDS = 600
+
 # Global variables for metrics storage
 metrics_data = {}  # Key: video_id, Value: metrics dict
 channel_metrics_data = {}  # Key: channel_id, Value: channel metrics dict
@@ -55,6 +58,73 @@ active_entropy_lock = (
     threading.Lock()
 )  # Lock for thread-safe access to active_entropy_computation
 
+
+def cleanup_expired_metrics():
+    """Remove metrics that are older than METRICS_EXPIRATION_SECONDS."""
+    current_time = time.time()
+
+    # Clean up metrics_data
+    with metrics_lock:
+        expired_video_ids = [
+            video_id
+            for video_id, data in metrics_data.items()
+            if current_time - data.get("timestamp", 0)
+            > METRICS_EXPIRATION_SECONDS
+        ]
+        for video_id in expired_video_ids:
+            del metrics_data[video_id]
+            logger.debug(f"Cleaned up expired metrics for video {video_id}")
+
+    # Clean up channel_metrics_data
+    with metrics_lock:
+        expired_channel_ids = [
+            channel_id
+            for channel_id, data in channel_metrics_data.items()
+            if current_time - data.get("timestamp", 0)
+            > METRICS_EXPIRATION_SECONDS
+        ]
+        for channel_id in expired_channel_ids:
+            del channel_metrics_data[channel_id]
+            logger.debug(
+                f"Cleaned up expired metrics for channel {channel_id}"
+            )
+
+    # Clean up entropy_data
+    with entropy_data_lock:
+        expired_entropy_ids = [
+            video_id
+            for video_id, data in entropy_data.items()
+            if current_time - data.get("timestamp", 0)
+            > METRICS_EXPIRATION_SECONDS
+        ]
+        for video_id in expired_entropy_ids:
+            del entropy_data[video_id]
+            logger.debug(
+                f"Cleaned up expired entropy data for video {video_id}"
+            )
+
+    # Clean up object_data
+    with object_data_lock:
+        expired_object_videos = []
+        for video_id, obj_types in object_data.items():
+            expired_types = [
+                obj_type
+                for obj_type, obj_info in obj_types.items()
+                if current_time - obj_info.get("timestamp", 0)
+                > METRICS_EXPIRATION_SECONDS
+            ]
+            for obj_type in expired_types:
+                del object_data[video_id][obj_type]
+                logger.debug(
+                    f"Cleaned up expired object data for video {video_id}, type {obj_type}"
+                )
+            if not object_data[video_id]:
+                expired_object_videos.append(video_id)
+        for video_id in expired_object_videos:
+            del object_data[video_id]
+            logger.debug(f"Cleaned up empty object data for video {video_id}")
+
+
 # Prometheus registry
 registry = CollectorRegistry()
 
@@ -64,6 +134,9 @@ class TimestampedMetricsCollector(Collector):
 
     def collect(self):
         """Collect metrics with timestamps."""
+        # Clean up expired metrics before collecting
+        cleanup_expired_metrics()
+
         # Always create metric families, regardless of data availability
 
         # Entropy metrics
