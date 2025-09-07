@@ -25,23 +25,23 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 ## Metrics
 
 ### Entropy Metrics
-- `youtube_video_spatial_entropy_hue{video_id="...", title="..."}`: Hue component entropy of pixel intensities within a single frame (0-8 bits range)
-- `youtube_video_spatial_entropy_saturation{video_id="...", title="..."}`: Saturation component entropy of pixel intensities within a single frame (0-8 bits range)
-- `youtube_video_spatial_entropy_value{video_id="...", title="..."}`: Value component entropy of pixel intensities within a single frame (0-8 bits range)
-- `youtube_video_temporal_entropy_hue{video_id="...", title="..."}`: Hue component entropy of pixel differences between frames (0-8 bits range)
-- `youtube_video_temporal_entropy_saturation{video_id="...", title="..."}`: Saturation component entropy of pixel differences between frames (0-8 bits range)
-- `youtube_video_temporal_entropy_value{video_id="...", title="..."}`: Value component entropy of pixel differences between frames (0-8 bits range)
-- `youtube_video_bitrate{video_id="...", title="...", resolution="..."}`: **Measured** bitrate of the video stream in bits per second from actual video segment downloads (not format metadata)
+- `youtube_video_spatial_entropy_hue{video_id="...", title="...", channel_id="...", channel_title="..."}`: Hue component entropy of pixel intensities within a single frame (0-8 bits range)
+- `youtube_video_spatial_entropy_saturation{video_id="...", title="...", channel_id="...", channel_title="..."}`: Saturation component entropy of pixel intensities within a single frame (0-8 bits range)
+- `youtube_video_spatial_entropy_value{video_id="...", title="...", channel_id="...", channel_title="..."}`: Value component entropy of pixel intensities within a single frame (0-8 bits range)
+- `youtube_video_temporal_entropy_hue{video_id="...", title="...", channel_id="...", channel_title="..."}`: Hue component entropy of pixel differences between frames (0-8 bits range)
+- `youtube_video_temporal_entropy_saturation{video_id="...", title="...", channel_id="...", channel_title="..."}`: Saturation component entropy of pixel differences between frames (0-8 bits range)
+- `youtube_video_temporal_entropy_value{video_id="...", title="...", channel_id="...", channel_title="..."}`: Value component entropy of pixel differences between frames (0-8 bits range)
+- `youtube_video_bitrate{video_id="...", title="...", channel_id="...", channel_title="...", resolution="..."}`: **Measured** bitrate of the video stream in bits per second from actual video segment downloads (not format metadata)
 
 ### Object Detection Metrics
-- `youtube_video_object_count{video_id="...", title="...", object_type="..."}`: Number of detected objects of specified type in high-resolution video frames using AI object detection
+- `youtube_video_object_count{video_id="...", title="...", channel_id="...", channel_title="...", object_type="..."}`: Number of detected objects of specified type in high-resolution video frames using AI object detection
 
 ### YouTube API Metrics
-- `youtube_video_view_count{video_id="...", title="..."}`: Total view count reported by YouTube
-- `youtube_video_like_count{video_id="...", title="..."}`: Total like count reported by YouTube
-- `youtube_video_concurrent_viewers{video_id="...", title="..."}`: Concurrent viewers (only non-zero while live)
-- `youtube_video_live{video_id="...", title="..."}`: 1 if YouTube reports the video as currently live, else 0
-- `youtube_video_live_status{video_id="...", title="...", state="..."}`: Infometric with state label; 1 for the current state ("live", "upcoming", or "none")
+- `youtube_video_view_count{video_id="...", title="...", channel_id="...", channel_title="..."}`: Total view count reported by YouTube
+- `youtube_video_like_count{video_id="...", title="...", channel_id="...", channel_title="..."}`: Total like count reported by YouTube
+- `youtube_video_concurrent_viewers{video_id="...", title="...", channel_id="...", channel_title="..."}`: Concurrent viewers (only non-zero while live)
+- `youtube_video_live{video_id="...", title="...", channel_id="...", channel_title="..."}`: 1 if YouTube reports the video as currently live, else 0
+- `youtube_video_live_status{video_id="...", title="...", channel_id="...", channel_title="...", state="..."}`: Infometric with state label; 1 for the current state ("live", "upcoming", or "none")
 
 ### Channel Metrics
 - `youtube_channel_subscriber_count{channel_id="...", channel_title="..."}`: Total subscriber count reported by YouTube for this channel

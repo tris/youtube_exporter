@@ -71,69 +71,87 @@ class TimestampedMetricsCollector(Collector):
         spatial_hue_family = GaugeMetricFamily(
             "youtube_video_spatial_entropy_hue",
             "Hue component entropy of pixel intensities within a single frame (bits, 0-8 range)",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         spatial_saturation_family = GaugeMetricFamily(
             "youtube_video_spatial_entropy_saturation",
             "Saturation component entropy of pixel intensities within a single frame (bits, 0-8 range)",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         spatial_value_family = GaugeMetricFamily(
             "youtube_video_spatial_entropy_value",
             "Value component entropy of pixel intensities within a single frame (bits, 0-8 range)",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         temporal_hue_family = GaugeMetricFamily(
             "youtube_video_temporal_entropy_hue",
             "Hue component entropy of pixel differences between frames (bits, 0-8 range)",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         temporal_saturation_family = GaugeMetricFamily(
             "youtube_video_temporal_entropy_saturation",
             "Saturation component entropy of pixel differences between frames (bits, 0-8 range)",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         temporal_value_family = GaugeMetricFamily(
             "youtube_video_temporal_entropy_value",
             "Value component entropy of pixel differences between frames (bits, 0-8 range)",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         object_count_family = GaugeMetricFamily(
             "youtube_video_object_count",
             "Number of detected objects of specified type in the video frame",
-            labels=["video_id", "title", "object_type"],
+            labels=[
+                "video_id",
+                "title",
+                "channel_id",
+                "channel_title",
+                "object_type",
+            ],
         )
         bitrate_family = GaugeMetricFamily(
             "youtube_video_bitrate",
             "Bitrate of the video stream in bits per second, calculated from 1-second download",
-            labels=["video_id", "title", "resolution"],
+            labels=[
+                "video_id",
+                "title",
+                "channel_id",
+                "channel_title",
+                "resolution",
+            ],
         )
 
         # YouTube API metrics
         view_family = GaugeMetricFamily(
             "youtube_video_view_count",
             "Total view count reported by YouTube for this video",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         like_family = GaugeMetricFamily(
             "youtube_video_like_count",
             "Total like count reported by YouTube for this video",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         concurrent_family = GaugeMetricFamily(
             "youtube_video_concurrent_viewers",
             "Concurrent viewers (only non-zero while live) reported by YouTube for this video",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         live_family = GaugeMetricFamily(
             "youtube_video_live",
             "1 if YouTube reports the video as currently live, else 0",
-            labels=["video_id", "title"],
+            labels=["video_id", "title", "channel_id", "channel_title"],
         )
         live_status_family = GaugeMetricFamily(
             "youtube_video_live_status",
             'Infometric with state label; 1 for the current state ("live", "upcoming", or "none")',
-            labels=["video_id", "title", "state"],
+            labels=[
+                "video_id",
+                "title",
+                "channel_id",
+                "channel_title",
+                "state",
+            ],
         )
 
         # Channel metrics
@@ -222,11 +240,15 @@ class TimestampedMetricsCollector(Collector):
                 with object_data_lock:
                     # Direct lookup by video_id, then iterate over object types
                     video_objects = object_data.get(video_id, {})
+                    channel_id = api_data.get("channel_id", "")
+                    channel_title = api_data.get("channel_title", "")
                     for obj_type, obj_info in video_objects.items():
                         object_count_family.add_metric(
                             [
                                 video_id,
                                 title,
+                                channel_id,
+                                safe_label_value(channel_title),
                                 safe_label_value(obj_type),
                             ],
                             obj_info["object_count"],
@@ -240,24 +262,41 @@ class TimestampedMetricsCollector(Collector):
                         entropy_timestamp = entropy_info.get(
                             "timestamp", data["timestamp"]
                         )
+                        channel_id = api_data.get("channel_id", "")
+                        channel_title = api_data.get("channel_title", "")
                         if "spatial_entropy" in entropy_info:
                             spatial_ent = entropy_info["spatial_entropy"]
                             # HSV format
                             if "hue" in spatial_ent:
                                 spatial_hue_family.add_metric(
-                                    [video_id, title],
+                                    [
+                                        video_id,
+                                        title,
+                                        channel_id,
+                                        safe_label_value(channel_title),
+                                    ],
                                     spatial_ent["hue"],
                                     timestamp=entropy_timestamp,
                                 )
                             if "saturation" in spatial_ent:
                                 spatial_saturation_family.add_metric(
-                                    [video_id, title],
+                                    [
+                                        video_id,
+                                        title,
+                                        channel_id,
+                                        safe_label_value(channel_title),
+                                    ],
                                     spatial_ent["saturation"],
                                     timestamp=entropy_timestamp,
                                 )
                             if "value" in spatial_ent:
                                 spatial_value_family.add_metric(
-                                    [video_id, title],
+                                    [
+                                        video_id,
+                                        title,
+                                        channel_id,
+                                        safe_label_value(channel_title),
+                                    ],
                                     spatial_ent["value"],
                                     timestamp=entropy_timestamp,
                                 )
@@ -266,19 +305,34 @@ class TimestampedMetricsCollector(Collector):
                             # HSV format
                             if "hue" in temporal_ent:
                                 temporal_hue_family.add_metric(
-                                    [video_id, title],
+                                    [
+                                        video_id,
+                                        title,
+                                        channel_id,
+                                        safe_label_value(channel_title),
+                                    ],
                                     temporal_ent["hue"],
                                     timestamp=entropy_timestamp,
                                 )
                             if "saturation" in temporal_ent:
                                 temporal_saturation_family.add_metric(
-                                    [video_id, title],
+                                    [
+                                        video_id,
+                                        title,
+                                        channel_id,
+                                        safe_label_value(channel_title),
+                                    ],
                                     temporal_ent["saturation"],
                                     timestamp=entropy_timestamp,
                                 )
                             if "value" in temporal_ent:
                                 temporal_value_family.add_metric(
-                                    [video_id, title],
+                                    [
+                                        video_id,
+                                        title,
+                                        channel_id,
+                                        safe_label_value(channel_title),
+                                    ],
                                     temporal_ent["value"],
                                     timestamp=entropy_timestamp,
                                 )
@@ -290,6 +344,8 @@ class TimestampedMetricsCollector(Collector):
                                 [
                                     video_id,
                                     title,
+                                    channel_id,
+                                    safe_label_value(channel_title),
                                     safe_label_value(
                                         entropy_info.get(
                                             "resolution", "unknown"
@@ -310,9 +366,13 @@ class TimestampedMetricsCollector(Collector):
                         )
                         continue  # Suppress API metrics for videos without title
 
+                    channel_id = api_data.get("channel_id", "")
+                    channel_title = api_data.get("channel_title", "")
                     labels = [
                         video_id,
                         safe_label_value(api_title),
+                        channel_id,
+                        safe_label_value(channel_title),
                     ]
 
                     view_family.add_metric(
@@ -340,6 +400,8 @@ class TimestampedMetricsCollector(Collector):
                     live_status_labels = [
                         video_id,
                         safe_label_value(api_data.get("title", "")),
+                        channel_id,
+                        safe_label_value(channel_title),
                         safe_label_value(
                             api_data.get("live_broadcast_state", "none")
                         ),
@@ -404,9 +466,12 @@ class TimestampedMetricsCollector(Collector):
                             )
                             continue  # Suppress metrics for streams without title
 
+                        channel_title = channel_info.get("title", "")
                         stream_labels = [
                             stream_video_id,
                             safe_label_value(stream_title),
+                            channel_id,
+                            safe_label_value(channel_title),
                         ]
 
                         # Check for entropy data in the separate entropy_data storage
@@ -517,6 +582,8 @@ class TimestampedMetricsCollector(Collector):
                                             safe_label_value(
                                                 stream.get("title", "")
                                             ),
+                                            channel_id,
+                                            safe_label_value(channel_title),
                                             safe_label_value(
                                                 entropy_info.get(
                                                     "resolution", "unknown"
@@ -540,6 +607,8 @@ class TimestampedMetricsCollector(Collector):
                                         safe_label_value(
                                             stream.get("title", "")
                                         ),
+                                        channel_id,
+                                        safe_label_value(channel_title),
                                         safe_label_value(obj_type),
                                     ],
                                     obj_info["object_count"],
@@ -553,6 +622,8 @@ class TimestampedMetricsCollector(Collector):
                         live_status_labels = [
                             stream_video_id,
                             safe_label_value(stream.get("title", "")),
+                            channel_id,
+                            safe_label_value(channel_title),
                             safe_label_value(
                                 stream.get("live_broadcast_state", "none")
                             ),
@@ -990,6 +1061,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             "live_binary": live_binary,
             "title": title,
             "channel_id": channel_id,
+            "channel_title": "",  # Will be updated below
         }
 
         # Also fetch channel information for this video
@@ -999,12 +1071,12 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 channel_snapshot = process_channel_data(
                     channel_data, [], False
                 )  # No live streams for video requests, no image fetching
+                channel_title = safe_label_value(channel_snapshot["title"])
+                api_data["channel_title"] = channel_title
                 with metrics_lock:
                     channel_metrics_data[channel_id] = {
                         "channel_info": {
-                            "title": safe_label_value(
-                                channel_snapshot["title"]
-                            ),
+                            "title": channel_title,
                             "subscriber_count": channel_snapshot[
                                 "subscriber_count"
                             ],
@@ -1018,6 +1090,13 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                 logger.info(
                     f"Fetched channel info for {channel_id} from video {video_id}"
                 )
+        elif channel_id and channel_id in channel_metrics_data:
+            # If channel data already exists, get the title from there
+            with metrics_lock:
+                channel_info = channel_metrics_data[channel_id].get(
+                    "channel_info", {}
+                )
+                api_data["channel_title"] = channel_info.get("title", "")
 
         logger.info(
             f"YouTube API data for {video_id}: views={view_count}, likes={like_count}, live={live_binary}, title='{title}'"
