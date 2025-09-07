@@ -521,8 +521,9 @@ def safe_label_value(value):
     if value is None:
         return ""
     if not isinstance(value, str):
-        return str(value)
-    return value
+        value = str(value)
+    # Escape braces to prevent formatting issues
+    return value.replace("{", "{{").replace("}", "}}")
 
 
 def process_channel_data(channel, live_videos, fetch_images=True):

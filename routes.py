@@ -173,7 +173,7 @@ def metrics():
 youtube_exporter_endpoint_error{{endpoint="/metrics"}} 1
 # HELP youtube_exporter_endpoint_error_info Error information for metrics endpoint
 # TYPE youtube_exporter_endpoint_error_info gauge
-youtube_exporter_endpoint_error_info{{endpoint="/metrics",error_message="{str(e).replace('"', '\\"')}"}} 1
+youtube_exporter_endpoint_error_info{{endpoint="/metrics",error_message="{str(e).replace('"', '\\"').replace('{', '{{').replace('}', '}}')}"}} 1
 """
         return Response(error_response, mimetype="text/plain", status=500)
 
