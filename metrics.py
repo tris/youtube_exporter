@@ -38,7 +38,7 @@ entropy_data_lock = (
 # Separate storage for object detection results
 object_data = (
     {}
-)  # Key: f"{video_id}_{object_type}", Value: {'object_count': int, 'object_type': str, 'timestamp': float}
+)  # Key: video_id, Value: {object_type: {'object_count': int, 'timestamp': float}}
 object_data_lock = (
     threading.Lock()
 )  # Lock for thread-safe access to object_data
@@ -195,11 +195,18 @@ class TimestampedMetricsCollector(Collector):
         if metrics_data:
             for video_id, data in metrics_data.items():
                 processed_videos.add(video_id)
-                # Get title for metrics
-                title = data.get("api_data", {}).get("title", "")
+                # Get title for metrics - skip entirely if we don't have API data with a valid title
+                api_data = data.get("api_data")
+                if not api_data:
+                    logger.debug(
+                        f"No API data for {video_id}, skipping all metrics"
+                    )
+                    continue
+
+                title = api_data.get("title", "")
                 if not title:
                     logger.warning(
-                        f"No title available for video {video_id}, suppressing metrics"
+                        f"Empty title for video {video_id}, suppressing metrics"
                     )
                     continue  # Suppress metrics for videos without title
 
@@ -208,17 +215,18 @@ class TimestampedMetricsCollector(Collector):
 
                 # Object count metrics from separate storage (emit all cached results)
                 with object_data_lock:
-                    for key, obj_info in object_data.items():
-                        if obj_info.get("video_id") == video_id:
-                            object_count_family.add_metric(
-                                [
-                                    video_id,
-                                    title,
-                                    safe_label_value(obj_info["object_type"]),
-                                ],
-                                obj_info["object_count"],
-                                timestamp=obj_info["timestamp"],
-                            )
+                    # Direct lookup by video_id, then iterate over object types
+                    video_objects = object_data.get(video_id, {})
+                    for obj_type, obj_info in video_objects.items():
+                        object_count_family.add_metric(
+                            [
+                                video_id,
+                                title,
+                                safe_label_value(obj_type),
+                            ],
+                            obj_info["object_count"],
+                            timestamp=obj_info["timestamp"],
+                        )
 
                 # Check for entropy data in separate storage
                 with entropy_data_lock:
@@ -511,23 +519,24 @@ class TimestampedMetricsCollector(Collector):
 
                         # Add object detection metrics from separate storage if available
                         with object_data_lock:
-                            for key, obj_info in object_data.items():
-                                if obj_info.get("video_id") == stream_video_id:
-                                    object_count_family.add_metric(
-                                        [
-                                            stream_video_id,
-                                            safe_label_value(
-                                                stream.get("title", "")
-                                            ),
-                                            safe_label_value(
-                                                obj_info["object_type"]
-                                            ),
-                                        ],
-                                        obj_info["object_count"],
-                                        timestamp=obj_info["timestamp"],
-                                    )
+                            # Direct lookup by stream_video_id, then iterate over object types
+                            video_objects = object_data.get(
+                                stream_video_id, {}
+                            )
+                            for obj_type, obj_info in video_objects.items():
+                                object_count_family.add_metric(
+                                    [
+                                        stream_video_id,
+                                        safe_label_value(
+                                            stream.get("title", "")
+                                        ),
+                                        safe_label_value(obj_type),
+                                    ],
+                                    obj_info["object_count"],
+                                    timestamp=obj_info["timestamp"],
+                                )
                                 logger.debug(
-                                    f"Adding object_count metric for {stream_video_id}: {obj_info['object_count']} '{obj_info['object_type']}' objects"
+                                    f"Adding object_count metric for {stream_video_id}: {obj_info['object_count']} '{obj_type}' objects"
                                 )
 
                         # Live status infometric
@@ -819,12 +828,14 @@ def update_channel_metrics(
         }
 
     # If fetch_images is True, kick off background entropy computation for live streams
+    # Only for streams that have valid titles
     if fetch_images and not disable_live:
         import threading
 
         for stream in channel_snapshot["live_streams"]:
             video_id = stream.get("video_id")
-            if video_id and stream.get("live_binary") == 1:
+            stream_title = stream.get("title", "")
+            if video_id and stream.get("live_binary") == 1 and stream_title:
                 # Check if we already have recent entropy data
                 with entropy_data_lock:
                     if video_id in entropy_data:
@@ -854,18 +865,20 @@ def update_channel_metrics(
                     active_entropy_computation.add(video_id)
                 thread = threading.Thread(
                     target=compute_and_store_entropy,
-                    args=(video_id, stream.get("title"), None),
+                    args=(video_id, stream_title, None),
                     daemon=True,
                 )
                 thread.start()
 
     # If match is provided, also do object detection for live streams
+    # Only for streams that have valid titles
     if match and not disable_live:
         import threading
 
         for stream in channel_snapshot["live_streams"]:
             video_id = stream.get("video_id")
-            if video_id and stream.get("live_binary") == 1:
+            stream_title = stream.get("title", "")
+            if video_id and stream.get("live_binary") == 1 and stream_title:
                 # Object counting mode - check if we need to start background detection
                 key = f"{video_id}_{match}"
                 with object_data_lock:
@@ -932,7 +945,6 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
     api_data = {}
 
     if video_data:
-        # Extract API data similar to Go version
         stats = video_data.get("statistics", {})
         lsd = video_data.get("liveStreamingDetails", {})
         snippet = video_data.get("snippet", {})
@@ -992,25 +1004,24 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
         )
     else:
         logger.warning(
-            f"Failed to fetch YouTube API data for {video_id}, using fallback data"
+            f"Failed to fetch YouTube API data for {video_id}, skipping API metrics"
         )
-        # Provide fallback API data when YouTube API fails
-        api_data = {
-            "view_count": 0,
-            "like_count": 0,
-            "concurrent_viewers": 0,
-            "live_broadcast_state": "none",
-            "live_binary": 0,
-            "title": "",
-            "channel_id": "",
-        }
+        # Don't synthesize fake data - just skip API metrics for this video
+        api_data = None
 
-    # Store API data
+    # Store API data (only if we successfully fetched it)
     with metrics_lock:
-        metrics_data[video_id] = {"api_data": api_data, "timestamp": timestamp}
+        if api_data is not None:
+            metrics_data[video_id] = {
+                "api_data": api_data,
+                "timestamp": timestamp,
+            }
+        else:
+            # Don't store anything if API failed - let entropy/object detection still work
+            metrics_data[video_id] = {"timestamp": timestamp}
 
     # Handle entropy computation and object counting
-    if fetch_images:
+    if fetch_images and api_data is not None:
         # Check if we already have recent entropy data
         with entropy_data_lock:
             if video_id in entropy_data:
@@ -1075,7 +1086,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
                     thread.start()
 
         # If match is provided, also do object detection
-        if match:
+        if match and api_data is not None:
             logger.debug(
                 f"Object detection requested for video_id={video_id}, match={match}"
             )
