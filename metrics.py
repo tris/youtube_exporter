@@ -796,10 +796,10 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
 
         if object_count is not None:
             with object_data_lock:
-                object_data[key] = {
+                if video_id not in object_data:
+                    object_data[video_id] = {}
+                object_data[video_id][object_type] = {
                     "object_count": object_count,
-                    "object_type": object_type,
-                    "video_id": video_id,
                     "timestamp": time.time(),
                 }
             logger.info(
@@ -972,8 +972,11 @@ def update_channel_metrics(
                 # Object counting mode - check if we need to start background detection
                 key = f"{video_id}_{match}"
                 with object_data_lock:
-                    if key in object_data:
-                        stored_data = object_data[key]
+                    if (
+                        video_id in object_data
+                        and match in object_data[video_id]
+                    ):
+                        stored_data = object_data[video_id][match]
                         # Check if existing data is recent enough
                         age = time.time() - stored_data.get("timestamp", 0)
                         if age < 300:  # Use existing data if recent
@@ -1192,8 +1195,8 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
             # Object counting mode - check if we need to start background detection
             key = f"{video_id}_{match}"
             with object_data_lock:
-                if key in object_data:
-                    stored_data = object_data[key]
+                if video_id in object_data and match in object_data[video_id]:
+                    stored_data = object_data[video_id][match]
                     # Check if existing data is recent enough
                     age = time.time() - stored_data.get("timestamp", 0)
                     if age < 300:  # Use existing data if recent
