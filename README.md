@@ -1,43 +1,36 @@
 # youtube_exporter
 
-A Prometheus exporter that monitors YouTube videos and live streams for entropy metrics and metadata to detect when streams go "dark" or get stuck. Also includes stream bitrate estimation and object detection.
+A Prometheus exporter that monitors YouTube videos and live streams for image entropy metrics and metadata to detect when streams go "dark" or get stuck. Typical channel and video statistics are included (views, videos, likes, subscribers), as well as stream bitrate estimation, and object detection via [OWLv2](https://huggingface.co/docs/transformers/en/model_doc/owlv2).
 
 ## Features
 
-### Video Analysis & Quality
-- **Maximum Resolution Processing**: Automatically selects highest available quality (up to 8K/4320p) for optimal analysis
-- **Advanced Frame Capture**: Fetches frames from YouTube live streams and videos using yt-dlp with intelligent manifest detection
-- **Smart Data Reuse**: Caches high-resolution frames between entropy and object detection to minimize bandwidth usage
-
 ### Entropy Calculation
-- **Spatial entropy**: Shannon entropy of pixel intensities within frames (0-8 bits range)
-- **Temporal entropy**: Entropy of differences between frames separated by ~1 second (0-8 bits range)
-- **High-resolution analysis**: Uses maximum available resolution for more accurate entropy measurements
+- **Spatial entropy**: Shannon entropy calculated across HSV color channels (hue, saturation, value) within frames (0-8 bits range)
+- **Temporal entropy**: Entropy of differences between frames separated by ~1 second, calculated per HSV channel (0-8 bits range)
 
 ### Bitrate Measurement
-- **Measured Bitrates**: Real-time bitrate calculation from actual video segment downloads (not format metadata)
-- **HLS/DASH Support**: Parses manifests and downloads actual video segments for accurate live stream measurements
-- **Intelligent Detection**: Automatically detects manifest vs. direct streams and applies appropriate measurement strategy
+- **Measured Bitrates**: Real-time bitrate estimation from actual video segment downloads
 
 ### Performance & Reliability
 - **Asynchronous Processing**: Non-blocking API responses with background video processing
-- **Race Condition Prevention**: Thread-safe duplicate computation prevention for efficient resource usage
 - **Smart Caching**: 5-minute frame cache with automatic expiration and reuse logic
-- **Early Manifest Detection**: Avoids unnecessary frame capture from playlist files
 
 ### Integration & Monitoring
 - **YouTube API Integration**: Fetches comprehensive metadata (views, likes, concurrent viewers, live status, channel info)
 - **Channel Monitoring**: Support for monitoring entire channels and their live streams
-- **Object Detection**: Optional AI-powered object counting with frame reuse optimization
-- **Prometheus Export**: Exposes all metrics via HTTP endpoint for Prometheus scraping with proper timestamps
+- **Object Detection**: Optional AI-powered object counting
+- **Prometheus Export**: Exposes all metrics via HTTP endpoint for Prometheus scraping, with timestamps
 - **Resource Management**: Built-in quota tracking, error monitoring, and process metrics
-- **Validation**: Video ID and channel ID validation with proper error handling
 
 ## Metrics
 
 ### Entropy Metrics
-- `youtube_video_spatial_entropy{video_id="...", title="..."}`: Shannon entropy of pixel intensities within a single frame (0-8 bits range) - calculated from maximum resolution frames
-- `youtube_video_temporal_entropy{video_id="...", title="..."}`: Shannon entropy of pixel differences between frames separated by ~1 second (0-8 bits range) - uses high-resolution frame analysis
+- `youtube_video_spatial_entropy_hue{video_id="...", title="..."}`: Hue component entropy of pixel intensities within a single frame (0-8 bits range)
+- `youtube_video_spatial_entropy_saturation{video_id="...", title="..."}`: Saturation component entropy of pixel intensities within a single frame (0-8 bits range)
+- `youtube_video_spatial_entropy_value{video_id="...", title="..."}`: Value component entropy of pixel intensities within a single frame (0-8 bits range)
+- `youtube_video_temporal_entropy_hue{video_id="...", title="..."}`: Hue component entropy of pixel differences between frames (0-8 bits range)
+- `youtube_video_temporal_entropy_saturation{video_id="...", title="..."}`: Saturation component entropy of pixel differences between frames (0-8 bits range)
+- `youtube_video_temporal_entropy_value{video_id="...", title="..."}`: Value component entropy of pixel differences between frames (0-8 bits range)
 - `youtube_video_bitrate{video_id="...", title="...", resolution="..."}`: **Measured** bitrate of the video stream in bits per second from actual video segment downloads (not format metadata)
 
 ### Object Detection Metrics
@@ -97,14 +90,14 @@ A Prometheus exporter that monitors YouTube videos and live streams for entropy 
 ## Query Parameters
 
 ### Video Metrics
-- `video_id` (required for video metrics): YouTube video ID (11 characters)
+- `video_id`: YouTube video ID (11 characters)
 - `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
 - `max_height` (optional): Maximum video height in pixels (default: 4320 for up to 8K resolution)
 - `match` (optional): Object type to detect and count (e.g., "person", "car", "dog") - enables AI object detection
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
 
 ### Channel Metrics
-- `channel` (required for channel metrics): YouTube channel ID (UC followed by 22 characters)
+- `channel`: YouTube channel ID (UC followed by 22 characters)
 - `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
 - `disable_live` (optional): Disable live stream detection for channels (default: false)
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
@@ -112,8 +105,6 @@ A Prometheus exporter that monitors YouTube videos and live streams for entropy 
 ### Performance Notes
 - **Asynchronous Processing**: First request returns immediately with YouTube API data; entropy metrics appear in subsequent requests after background processing completes
 - **Smart Caching**: Entropy data is cached for 5 minutes to avoid redundant processing
-- **Frame Reuse**: High-resolution frames are automatically reused between entropy calculation and object detection when both are requested
-- **Race Condition Prevention**: Multiple simultaneous requests for the same video are automatically deduplicated
 
 ## Examples
 
@@ -176,19 +167,6 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 - `PORT` (optional): Server port (default: 9473)
 - `LOG_LEVEL` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
 - `MODEL_CACHE_DIR` (optional): Custom directory for HuggingFace model cache to persist downloaded models between restarts
-
-### Performance Settings
-- **Maximum Resolution**: Up to 8K (4320p) - configurable via `max_height` parameter
-- **Default fetch interval**: 5 minutes (300 seconds)
-- **Minimum fetch interval**: 30 seconds
-- **Cache duration**: 5 minutes for entropy data and high-resolution frames
-- **Background processing**: Automatic for all video analysis to ensure non-blocking API responses
-
-### Quality & Accuracy
-- **Bitrate measurement**: Always measured from actual video segment downloads, never from format metadata
-- **Entropy calculation**: Uses maximum available resolution for highest accuracy
-- **Frame reuse**: Intelligent caching between entropy and object detection operations
-- **Manifest detection**: Automatic detection and parsing of HLS/DASH streams
 
 ## Deployment
 
