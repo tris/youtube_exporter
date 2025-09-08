@@ -167,6 +167,33 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 - `PORT` (optional): Server port (default: 9473)
 - `LOG_LEVEL` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
 - `MODEL_CACHE_DIR` (optional): Custom directory for HuggingFace model cache to persist downloaded models between restarts
+- `DEBUG_DIR` (optional): Directory to save debug images with bounding boxes for object detection troubleshooting (default: disabled)
+
+### Debugging Object Detection
+
+When debugging object detection results (false positives/negatives), you can enable debug image saving:
+
+1. Set the debug directory:
+   ```bash
+   export DEBUG_DIR="/path/to/debug/images"
+   ```
+
+2. For Docker with bind mount:
+   ```bash
+   docker run -v /host/debug:/debug -e DEBUG_DIR=/debug your-image
+   ```
+
+3. Run queries with object detection:
+   ```
+   http://localhost:9473/metrics?video_id=VIDEO_ID&match=person
+   ```
+
+4. Debug images will be saved as: `{video_id}_{object_type}_{count}_{timestamp}.png`
+   - Red bounding boxes around detected objects
+   - Confidence scores displayed above each box
+   - Images saved even when no objects are detected (with "No objects detected" text)
+
+This allows visual inspection of what the AI model is detecting and why.
 
 ## Deployment
 

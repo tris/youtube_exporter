@@ -47,6 +47,9 @@ CHANNEL_VIDEO_THRESHOLD = 4950  # Up to 99 pages of 50 videos
 # Persistent storage for HuggingFace models
 MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR")
 
+# Debug directory for saving object detection images with bounding boxes
+DEBUG_DIR = os.getenv("DEBUG_DIR")
+
 # Quota costs (YouTube Data API v3)
 QUOTA_COSTS = {
     "videos.list": 1,
