@@ -249,15 +249,33 @@ def count_objects_in_video(
             predictions = results[0]
             object_count = len(predictions["scores"])
 
-            # Debug: Save image with bounding boxes if DEBUG_DIR is set
+            # Debug: Save images if DEBUG_DIR is set
             if DEBUG_DIR:
                 try:
-                    # Create a copy of the image for drawing
-                    debug_image = image.copy()
-                    draw = ImageDraw.Draw(debug_image)
+                    # Create filename base
+                    timestamp = int(time.time())
+                    filename_base = (
+                        f"{video_id}_{object_type}_{object_count}_{timestamp}"
+                    )
 
-                    # Draw bounding boxes and scores if objects detected
+                    # Ensure directory exists
+                    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+                    # Save original image without bounding boxes
+                    original_filepath = os.path.join(
+                        DEBUG_DIR, f"{filename_base}.png"
+                    )
+                    image.save(original_filepath)
+                    logger.info(
+                        f"Saved original debug image: {original_filepath}"
+                    )
+
+                    # Only save bbox image if objects were detected
                     if object_count > 0:
+                        # Create a copy of the image for drawing bounding boxes
+                        debug_image = image.copy()
+                        draw = ImageDraw.Draw(debug_image)
+
                         boxes = predictions["boxes"].tolist()
                         scores = predictions["scores"].tolist()
 
@@ -272,30 +290,18 @@ def count_objects_in_video(
                             # Draw score text
                             score_text = f"{score:.2f}"
                             draw.text((x1, y1 - 10), score_text, fill="red")
-                    else:
-                        # No objects detected, add text indicator
-                        draw.text(
-                            (10, 10),
-                            f"No '{object_type}' detected",
-                            fill="red",
+
+                        # Save image with bounding boxes
+                        bbox_filepath = os.path.join(
+                            DEBUG_DIR, f"{filename_base}_bbox.png"
+                        )
+                        debug_image.save(bbox_filepath)
+                        logger.info(
+                            f"Saved debug image with bounding boxes: {bbox_filepath} (objects detected: {object_count})"
                         )
 
-                    # Create filename
-                    timestamp = int(time.time())
-                    filename = f"{video_id}_{object_type}_{object_count}_{timestamp}.png"
-                    filepath = os.path.join(DEBUG_DIR, filename)
-
-                    # Ensure directory exists
-                    os.makedirs(DEBUG_DIR, exist_ok=True)
-
-                    # Save image
-                    debug_image.save(filepath)
-                    logger.info(
-                        f"Saved debug image: {filepath} (objects detected: {object_count})"
-                    )
-
                 except Exception as e:
-                    logger.error(f"Failed to save debug image: {e}")
+                    logger.error(f"Failed to save debug image(s): {e}")
 
         if object_count > 0:
             scores = predictions["scores"].tolist()
