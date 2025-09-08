@@ -41,7 +41,6 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 - `youtube_video_like_count{video_id="...", title="...", channel_id="...", channel_title="..."}`: Total like count reported by YouTube
 - `youtube_video_concurrent_viewers{video_id="...", title="...", channel_id="...", channel_title="..."}`: Concurrent viewers (only non-zero while live)
 - `youtube_video_live{video_id="...", title="...", channel_id="...", channel_title="..."}`: 1 if YouTube reports the video as currently live, else 0
-- `youtube_video_live_status{video_id="...", title="...", channel_id="...", channel_title="...", state="..."}`: Infometric with state label; 1 for the current state ("live", "upcoming", or "none")
 
 ### Channel Metrics
 - `youtube_channel_subscriber_count{channel_id="...", channel_title="..."}`: Total subscriber count reported by YouTube for this channel

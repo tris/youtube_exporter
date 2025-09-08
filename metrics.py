@@ -215,17 +215,6 @@ class TimestampedMetricsCollector(Collector):
             "1 if YouTube reports the video as currently live, else 0",
             labels=["video_id", "title", "channel_id", "channel_title"],
         )
-        live_status_family = GaugeMetricFamily(
-            "youtube_video_live_status",
-            'Infometric with state label; 1 for the current state ("live", "upcoming", or "none")',
-            labels=[
-                "video_id",
-                "title",
-                "channel_id",
-                "channel_title",
-                "state",
-            ],
-        )
 
         # Channel metrics
         channel_subscriber_family = GaugeMetricFamily(
@@ -469,20 +458,6 @@ class TimestampedMetricsCollector(Collector):
                         timestamp=data["timestamp"],
                     )
 
-                    # Live status infometric
-                    live_status_labels = [
-                        video_id,
-                        safe_label_value(api_data.get("title", "")),
-                        channel_id,
-                        safe_label_value(channel_title),
-                        safe_label_value(
-                            api_data.get("live_broadcast_state", "none")
-                        ),
-                    ]
-                    live_status_family.add_metric(
-                        live_status_labels, 1, timestamp=data["timestamp"]
-                    )
-
         # Process channel metrics data
         if channel_metrics_data:
             for channel_id, channel_data in channel_metrics_data.items():
@@ -691,22 +666,6 @@ class TimestampedMetricsCollector(Collector):
                                     f"Adding object_count metric for {stream_video_id}: {obj_info['object_count']} '{obj_type}' objects"
                                 )
 
-                        # Live status infometric
-                        live_status_labels = [
-                            stream_video_id,
-                            safe_label_value(stream.get("title", "")),
-                            channel_id,
-                            safe_label_value(channel_title),
-                            safe_label_value(
-                                stream.get("live_broadcast_state", "none")
-                            ),
-                        ]
-                        live_status_family.add_metric(
-                            live_status_labels,
-                            1,
-                            timestamp=channel_data["timestamp"],
-                        )
-
         # Process quota metrics
         for (key_index, endpoint), units in quota.api_quota_total.items():
             quota_total_family.add_metric([endpoint, str(key_index)], units)
@@ -744,7 +703,6 @@ class TimestampedMetricsCollector(Collector):
         yield like_family
         yield concurrent_family
         yield live_family
-        yield live_status_family
         yield channel_subscriber_family
         yield channel_view_family
         yield channel_video_family
