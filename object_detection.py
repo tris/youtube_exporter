@@ -8,9 +8,9 @@ import traceback
 
 import cv2
 import yt_dlp
-from PIL import Image
+from PIL import Image, ImageDraw
 
-from config import MODEL_CACHE_DIR
+from config import DEBUG_DIR, MODEL_CACHE_DIR
 
 # Set up custom cache directory BEFORE importing transformers
 if MODEL_CACHE_DIR:
@@ -245,9 +245,57 @@ def count_objects_in_video(
             )
             logger.debug("Post-processing completed")
 
-        # Count detected objects
-        predictions = results[0]
-        object_count = len(predictions["scores"])
+            # Count detected objects
+            predictions = results[0]
+            object_count = len(predictions["scores"])
+
+            # Debug: Save image with bounding boxes if DEBUG_DIR is set
+            if DEBUG_DIR:
+                try:
+                    # Create a copy of the image for drawing
+                    debug_image = image.copy()
+                    draw = ImageDraw.Draw(debug_image)
+
+                    # Draw bounding boxes and scores if objects detected
+                    if object_count > 0:
+                        boxes = predictions["boxes"].tolist()
+                        scores = predictions["scores"].tolist()
+
+                        for i, (box, score) in enumerate(zip(boxes, scores)):
+                            x1, y1, x2, y2 = [int(coord) for coord in box]
+
+                            # Draw rectangle
+                            draw.rectangle(
+                                [x1, y1, x2, y2], outline="red", width=3
+                            )
+
+                            # Draw score text
+                            score_text = f"{score:.2f}"
+                            draw.text((x1, y1 - 10), score_text, fill="red")
+                    else:
+                        # No objects detected, add text indicator
+                        draw.text(
+                            (10, 10),
+                            f"No '{object_type}' detected",
+                            fill="red",
+                        )
+
+                    # Create filename
+                    timestamp = int(time.time())
+                    filename = f"{video_id}_{object_type}_{object_count}_{timestamp}.png"
+                    filepath = os.path.join(DEBUG_DIR, filename)
+
+                    # Ensure directory exists
+                    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+                    # Save image
+                    debug_image.save(filepath)
+                    logger.info(
+                        f"Saved debug image: {filepath} (objects detected: {object_count})"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to save debug image: {e}")
 
         if object_count > 0:
             scores = predictions["scores"].tolist()

@@ -167,6 +167,7 @@ curl "http://localhost:9473/metrics?video_id=yv2RtoIMNzA"
 - `PORT` (optional): Server port (default: 9473)
 - `LOG_LEVEL` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
 - `MODEL_CACHE_DIR` (optional): Custom directory for HuggingFace model cache to persist downloaded models between restarts
+- `DEBUG_DIR` (optional): Directory to save debug images with bounding boxes for object detection troubleshooting (default: disabled)
 
 ## Deployment
 
