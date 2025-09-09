@@ -1,5 +1,3 @@
-"""Quota tracking module for YouTube Data API usage."""
-
 import logging
 
 from config import QUOTA_COSTS

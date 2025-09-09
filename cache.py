@@ -1,5 +1,3 @@
-"""Cache management module for live stream data."""
-
 import logging
 import time
 

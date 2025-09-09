@@ -1,5 +1,3 @@
-"""YouTube API client module for fetching video and channel data."""
-
 import logging
 
 from googleapiclient.discovery import build

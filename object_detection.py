@@ -1,5 +1,3 @@
-"""Object detection module using OWLv2 for video frame analysis."""
-
 import logging
 import os
 import threading
@@ -26,6 +24,79 @@ logger = logging.getLogger(__name__)
 _model = None
 _processor = None
 _inference_lock = threading.Lock()  # Ensure thread-safe model inference
+
+
+def get_color_for_object(obj_type: str) -> str:
+    """
+    Deterministically choose a color for a given object type name.
+    Uses a fixed palette and a stable hash based on character codes.
+    """
+    palette = [
+        "red",
+        "green",
+        "blue",
+        "yellow",
+        "magenta",
+        "cyan",
+        "orange",
+        "white",
+    ]
+    idx = sum(ord(c) for c in str(obj_type)) % len(palette)
+    return palette[idx]
+
+
+def select_best_video_format(info: dict) -> dict:
+    """
+    Select the highest resolution video format from yt-dlp info.
+
+    Args:
+        info: yt-dlp extracted info dictionary
+
+    Returns:
+        dict: Selected format dictionary, or None if no valid format found
+
+    Raises:
+        ValueError: If info structure is invalid or no formats available
+    """
+    if not isinstance(info, dict) or "formats" not in info:
+        raise ValueError("Invalid info structure: missing 'formats' key")
+
+    formats = info["formats"]
+    if not formats:
+        raise ValueError("No video formats available")
+
+    # Filter to formats with valid height, preferring video formats
+    valid_formats = [
+        fmt
+        for fmt in formats
+        if isinstance(fmt, dict) and fmt.get("height", 0) > 0
+    ]
+
+    # If no formats have height, fall back to all formats (audio-only might be included)
+    if not valid_formats:
+        logger.warning(
+            "No formats with height found, using all available formats"
+        )
+        valid_formats = formats
+
+    # Select format with maximum height
+    try:
+        best_format = max(valid_formats, key=lambda fmt: fmt.get("height", 0))
+    except (TypeError, ValueError) as e:
+        logger.error(f"Error selecting best format: {e}")
+        raise ValueError("Unable to determine best video format") from e
+
+    # Validate that the selected format has required fields
+    required_fields = ["url"]
+    missing_fields = [
+        field for field in required_fields if field not in best_format
+    ]
+    if missing_fields:
+        raise ValueError(
+            f"Selected format missing required fields: {missing_fields}"
+        )
+
+    return best_format
 
 
 def check_opencv_ffmpeg_support():
@@ -61,23 +132,21 @@ def check_opencv_ffmpeg_support():
     return ffmpeg_enabled, backends
 
 
-def count_objects_in_video(
-    video_id, object_type, max_height=None, reuse_frame=None
-):
-    """Count objects of specified type in a high-resolution snapshot using OWLv2.
+def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
+    """Count objects of specified types in a high-resolution snapshot using OWLv2.
 
     Args:
         video_id: YouTube video ID
-        object_type: Type of object to detect
-        max_height: Maximum height (ignored for object detection - always uses highest resolution)
+        objects_to_thresholds: Dict of {object_type: threshold} pairs or single object_type string
         reuse_frame: Optional PIL Image to reuse instead of capturing new frame
     """
     import threading
 
     thread_id = threading.current_thread().ident
     logger.debug(
-        f"[THREAD-{thread_id}] Executing object detection for {video_id}, object_type: {object_type}"
+        f"[THREAD-{thread_id}] Executing object detection for {video_id}, objects: {list(objects_to_thresholds.keys())}"
     )
+
     # If we have a reusable frame from entropy calculation, use it
     if reuse_frame is not None:
         logger.info(
@@ -100,24 +169,20 @@ def count_objects_in_video(
                 info = ydl.extract_info(url, download=False)
 
                 if "formats" in info and info["formats"]:
-                    # Select the highest resolution format available
-                    formats = [
-                        f for f in info["formats"] if f.get("height", 0) > 0
-                    ]
-                    if not formats:
-                        formats = info["formats"]
-                    format = max(
-                        formats, key=lambda f: f.get("height", 0) or 0
-                    )
-                    stream_url = format["url"]
-                    resolution = (
-                        f"{format.get('width', 0)}x{format.get('height', 0)}"
-                    )
-                    selected_codec = format.get("vcodec", "unknown")
+                    try:
+                        selected_format = select_best_video_format(info)
+                        stream_url = selected_format["url"]
+                        resolution = f"{selected_format.get('width', 0)}x{selected_format.get('height', 0)}"
+                        selected_codec = selected_format.get(
+                            "vcodec", "unknown"
+                        )
 
-                    logger.info(
-                        f"Selected format for object detection: {resolution} (codec: {selected_codec})"
-                    )
+                        logger.info(
+                            f"Selected format for object detection: {resolution} (codec: {selected_codec})"
+                        )
+                    except ValueError as e:
+                        logger.error(f"Failed to select video format: {e}")
+                        return None
 
                     # Capture a single high-resolution frame
                     ret = False
@@ -128,54 +193,11 @@ def count_objects_in_video(
                         logger.error(
                             f"Failed to open stream URL: {stream_url} (codec: {selected_codec})"
                         )
-                        logger.warning(
-                            "This might be due to an incompatible codec. Trying alternative formats..."
-                        )
+                        return None
 
-                        # Try alternative formats if the selected one fails
-                        for alt_fmt in sorted(
-                            info["formats"],
-                            key=lambda f: f.get("height", 0) or 0,
-                            reverse=True,
-                        )[
-                            1:4
-                        ]:  # Next 3 best
-                            alt_height = alt_fmt.get("height", 0)
-                            alt_codec = alt_fmt.get("vcodec", "unknown")
-                            if alt_height > 0 and alt_height != format.get(
-                                "height", 0
-                            ):
-                                logger.info(
-                                    f"Trying alternative format: {alt_fmt.get('width', 0)}x{alt_height} (codec: {alt_codec})"
-                                )
-                                try:
-                                    alt_cap = cv2.VideoCapture(
-                                        alt_fmt["url"], cv2.CAP_FFMPEG
-                                    )
-                                    if alt_cap.isOpened():
-                                        alt_ret, alt_frame = alt_cap.read()
-                                        alt_cap.release()
-                                        if alt_ret:
-                                            logger.info(
-                                                f"Successfully captured frame with alternative format: {alt_fmt.get('width', 0)}x{alt_height}"
-                                            )
-                                            frame = alt_frame
-                                            resolution = f"{alt_fmt.get('width', 0)}x{alt_height}"
-                                            ret = True
-                                            break
-                                except Exception as e:
-                                    logger.debug(
-                                        f"Alternative format failed: {e}"
-                                    )
-                                    continue
-
-                        if not ret:
-                            logger.error("All format attempts failed")
-                            return None
-                    else:
-                        # Primary format opened successfully
-                        ret, frame = cap.read()
-                        cap.release()
+                    # Primary format opened successfully
+                    ret, frame = cap.read()
+                    cap.release()
 
                     if not ret:
                         logger.error("Failed to read frame from stream")
@@ -217,9 +239,9 @@ def count_objects_in_video(
             f"[THREAD-{thread_id}] Using model on device: {final_device}"
         )
 
-        # Prepare inputs
-        texts = [[f"a photo of a {object_type}"]]
-        logger.debug(f"Prepared text prompt: {texts}")
+        # Prepare inputs for all objects
+        texts = [[object_type for object_type in objects_to_thresholds.keys()]]
+        logger.debug(f"Prepared text prompts: {texts}")
         logger.debug(f"Image size: {image.size}, mode: {image.mode}")
 
         inputs = processor(text=texts, images=image, return_tensors="pt")
@@ -230,89 +252,174 @@ def count_objects_in_video(
 
         # Perform object detection with thread safety
         with _inference_lock:
-            logger.debug("Running model inference...")
+            logger.debug("Running model inference for objects...")
             # Use no_grad() to prevent memory accumulation during inference
             with torch.no_grad():
                 outputs = model(**inputs)
-            logger.debug(f"Model inference completed successfully")
+            logger.debug(f"Model inference completed successfully for objects")
 
             # Get predictions
             target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
             logger.debug(f"Target sizes: {target_sizes}")
 
             results = processor.post_process_grounded_object_detection(
-                outputs, target_sizes=target_sizes, threshold=0.1
+                outputs,
+                target_sizes=target_sizes,
+                threshold=0.0,  # Use lowest threshold, filter later
             )
-            logger.debug("Post-processing completed")
+            logger.debug("Post-processing completed for objects")
 
-            # Count detected objects
+            # Count detected objects for each type with individual thresholds
             predictions = results[0]
-            object_count = len(predictions["scores"])
+            object_counts = {}
 
-            # Debug: Save images if DEBUG_DIR is set
+            # Extract predictions as lists and group by label (prompt index)
+            labels_raw = predictions.get("labels", [])
+            scores_raw = predictions.get("scores", [])
+            boxes_raw = predictions.get("boxes", [])
+            labels_list = (
+                labels_raw.tolist()
+                if hasattr(labels_raw, "tolist")
+                else list(labels_raw)
+            )
+            scores_list = (
+                scores_raw.tolist()
+                if hasattr(scores_raw, "tolist")
+                else list(scores_raw)
+            )
+            boxes_list = (
+                boxes_raw.tolist()
+                if hasattr(boxes_raw, "tolist")
+                else list(boxes_raw)
+            )
+
+            # Prepare combined debug image and overlay structures (no object types in filenames)
+            timestamp = int(time.time())
+            filename_base = f"{video_id}_{timestamp}"
+            debug_image = None
+            draw = None
+            overlay_lines_top_left = (
+                []
+            )  # list of tuples (obj_type, count, color)
+            overlay_lines_bottom_left = (
+                []
+            )  # list of tuples (obj_type, [scores], color)
             if DEBUG_DIR:
-                try:
-                    # Create filename base
-                    timestamp = int(time.time())
-                    filename_base = (
-                        f"{video_id}_{object_type}_{object_count}_{timestamp}"
-                    )
+                os.makedirs(DEBUG_DIR, exist_ok=True)
+                debug_image = image.copy()
+                draw = ImageDraw.Draw(debug_image)
 
-                    # Ensure directory exists
-                    os.makedirs(DEBUG_DIR, exist_ok=True)
+            # Process each object type with its specific threshold
+            for i, (obj_type, threshold) in enumerate(
+                objects_to_thresholds.items()
+            ):
+                # Indices predicted for this prompt index i
+                label_indices = [
+                    j for j, lab in enumerate(labels_list) if lab == i
+                ]
 
-                    # Save original image without bounding boxes
-                    original_filepath = os.path.join(
-                        DEBUG_DIR, f"{filename_base}.png"
-                    )
-                    image.save(original_filepath)
-                    logger.info(
-                        f"Saved original debug image: {original_filepath}"
-                    )
+                # Apply threshold filtering per object type
+                valid_indices = [
+                    j for j in label_indices if scores_list[j] >= threshold
+                ]
+                object_count = len(valid_indices)
 
-                    # Only save bbox image if objects were detected
-                    if object_count > 0:
-                        # Create a copy of the image for drawing bounding boxes
-                        debug_image = image.copy()
-                        draw = ImageDraw.Draw(debug_image)
+                object_counts[obj_type] = object_count
 
-                        boxes = predictions["boxes"].tolist()
-                        scores = predictions["scores"].tolist()
+                # Debug draw (accumulate on a single image)
+                if DEBUG_DIR and draw is not None:
+                    try:
+                        # Prepare boxes and scores for this object type from global lists
+                        boxes = [boxes_list[j] for j in valid_indices]
+                        scores = [scores_list[j] for j in valid_indices]
 
-                        for i, (box, score) in enumerate(zip(boxes, scores)):
+                        # Choose color per object type
+                        color = get_color_for_object(obj_type)
+
+                        # Draw bounding boxes and inline scores in the object's color
+                        for box, score in zip(boxes, scores):
                             x1, y1, x2, y2 = [int(coord) for coord in box]
-
-                            # Draw rectangle
                             draw.rectangle(
-                                [x1, y1, x2, y2], outline="red", width=3
+                                [x1, y1, x2, y2], outline=color, width=3
+                            )
+                            # Small inline score near the box (may overlap)
+                            draw.text(
+                                (x1, max(0, y1 - 12)),
+                                f"{score:.2f}",
+                                fill=color,
                             )
 
-                            # Draw score text
-                            score_text = f"{score:.2f}"
-                            draw.text((x1, y1 - 10), score_text, fill="red")
-
-                        # Save image with bounding boxes
-                        bbox_filepath = os.path.join(
-                            DEBUG_DIR, f"{filename_base}_bbox.png"
+                        # Add overlay entries
+                        overlay_lines_top_left.append(
+                            (obj_type, object_count, color)
                         )
-                        debug_image.save(bbox_filepath)
-                        logger.info(
-                            f"Saved debug image with bounding boxes: {bbox_filepath} (objects detected: {object_count})"
+                        if scores:
+                            overlay_lines_bottom_left.append(
+                                (obj_type, [f"{s:.2f}" for s in scores], color)
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to prepare debug overlay for {obj_type}: {e}"
                         )
 
-                except Exception as e:
-                    logger.error(f"Failed to save debug image(s): {e}")
+                if object_count > 0:
+                    valid_scores = [scores_list[j] for j in valid_indices]
+                    logger.debug(
+                        f"Detected {object_count} '{obj_type}' objects with scores: {[f'{s:.3f}' for s in valid_scores]} (threshold: {threshold})"
+                    )
 
-        if object_count > 0:
-            scores = predictions["scores"].tolist()
-            logger.debug(
-                f"Detected {object_count} '{object_type}' objects with scores: {[f'{s:.3f}' for s in scores]}"
-            )
+                logger.info(
+                    f"Detected {object_count} '{obj_type}' objects in {video_id} (threshold: {threshold})"
+                )
 
-        logger.info(
-            f"Detected {object_count} '{object_type}' objects in {video_id}"
-        )
-        return object_count
+        # Save combined debug images (original and annotated)
+        if DEBUG_DIR:
+            try:
+                original_filepath = os.path.join(
+                    DEBUG_DIR, f"{filename_base}.png"
+                )
+                image.save(original_filepath)
+
+                if debug_image is None:
+                    debug_image = image.copy()
+                    draw = ImageDraw.Draw(debug_image)
+
+                # Top-left: object types and counts
+                tl_x, tl_y = 10, 10
+                line_h = 16
+                for obj_type, count, color in overlay_lines_top_left:
+                    draw.text(
+                        (tl_x, tl_y), f"{obj_type} (n={count})", fill=color
+                    )
+                    tl_y += line_h
+
+                # Bottom-left: scores per object type
+                bl_x = 10
+                bl_y = max(
+                    10,
+                    debug_image.size[1]
+                    - (len(overlay_lines_bottom_left) * line_h)
+                    - 10,
+                )
+                for obj_type, score_list, color in overlay_lines_bottom_left:
+                    draw.text(
+                        (bl_x, bl_y),
+                        f"{obj_type} scores: {', '.join(score_list)}",
+                        fill=color,
+                    )
+                    bl_y += line_h
+
+                bbox_filepath = os.path.join(
+                    DEBUG_DIR, f"{filename_base}_bbox.png"
+                )
+                debug_image.save(bbox_filepath)
+                logger.info(
+                    f"Saved combined debug images: {original_filepath}, {bbox_filepath}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to save combined debug images: {e}")
+
+        return object_counts
 
     except ImportError as e:
         logger.error(

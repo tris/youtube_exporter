@@ -1,5 +1,3 @@
-"""Configuration module for YouTube Entropy Exporter."""
-
 import os
 import re
 import sys
@@ -37,9 +35,6 @@ BATCH_SIZE = 50  # Batch size for API calls
 # Flask configuration
 FLASK_HOST = "0.0.0.0"
 FLASK_PORT = int(os.getenv("PORT", 9473))
-
-# Video quality settings
-MAX_VIDEO_HEIGHT = 4320  # Allow up to 8K resolution (4320p)
 
 # Threshold over which we switch to using the expensive search API
 CHANNEL_VIDEO_THRESHOLD = 4950  # Up to 99 pages of 50 videos

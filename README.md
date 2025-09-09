@@ -91,8 +91,7 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 ### Video Metrics
 - `video_id`: YouTube video ID (11 characters)
 - `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
-- `max_height` (optional): Maximum video height in pixels (default: 4320 for up to 8K resolution)
-- `match` (optional): Object type to detect and count (e.g., "person", "car", "dog") - enables AI object detection
+- `match` (optional): Object types to detect and count, with optional confidence thresholds (format: "object1:threshold1,object2:threshold2", e.g., "person:0.25,car:0.15"). Default threshold: 0.1
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
 
 ### Channel Metrics
@@ -118,19 +117,24 @@ With AI object detection:
 http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=person
 ```
 
+With custom detection threshold:
+```
+http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=person:0.25
+```
+
+Multiple objects with different thresholds:
+```
+http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=person:0.25,car:0.15
+```
+
 Disable image fetching (API data only):
 ```
 http://localhost:9473/metrics?video_id=yv2RtoIMNzA&fetch_images=false
 ```
 
-Custom resolution limit (1080p max):
-```
-http://localhost:9473/metrics?video_id=yv2RtoIMNzA&max_height=1080
-```
-
 Multiple features combined:
 ```
-http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=car&interval=30
+http://localhost:9473/metrics?video_id=yv2RtoIMNzA&match=car:0.2&interval=30
 ```
 
 ### Channel Metrics
@@ -261,7 +265,7 @@ Monitor entire YouTube channels and their live streams:
 ```
 
 ### AI Object Detection
-Monitor videos with object detection (e.g., count people in streams):
+Monitor videos with object detection and counting:
 
 ```yaml
 - job_name: 'youtube_objects'
@@ -269,36 +273,16 @@ Monitor videos with object detection (e.g., count people in streams):
   static_configs:
   - targets:
     - oefos36Y_Mo
-    - vZEINdmawdc
-  metrics_path: /metrics
-  relabel_configs:
-  - source_labels: [__address__]
-    target_label: __param_video_id
-  - target_label: __param_match
-    replacement: person
-  - target_label: __address__
-    replacement: your-server:9473
-```
-
-### Advanced Configuration
-Combine multiple parameters for comprehensive monitoring:
-
-```yaml
-- job_name: 'youtube_advanced'
-  scrape_interval: 3m
-  static_configs:
+    labels:
+      __param_match: 'person:0.3'
   - targets:
-    - JFkxBYPwkfY
+    - vZEINdmawdc
+    labels:
+      __param_match: 'person:0.3,car:0.3'
   metrics_path: /metrics
   relabel_configs:
   - source_labels: [__address__]
     target_label: __param_video_id
-  - target_label: __param_match
-    replacement: car
-  - target_label: __param_max_height
-    replacement: 1080
-  - target_label: __param_interval
-    replacement: 180
   - target_label: __address__
     replacement: your-server:9473
 ```
@@ -309,3 +293,4 @@ Combine multiple parameters for comprehensive monitoring:
 - **Server replacement**: Replace `your-server:9473` with your actual server hostname/IP and port
 - **Object detection**: Use common object types like "person", "car", "dog", "cat", "bicycle", etc.
 - **Performance**: Object detection and high-resolution processing may require longer scrape timeouts
+- **Duplicate metrics**: Using multiple jobs (e.g. `youtube` and `youtube_channel`) will create duplicate/overlapping metrics.

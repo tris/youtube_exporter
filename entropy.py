@@ -1,5 +1,3 @@
-"""Entropy calculation module for video frame analysis."""
-
 import logging
 import time
 import urllib.request
@@ -9,7 +7,7 @@ import numpy as np
 import yt_dlp
 from PIL import Image
 
-from config import DEFAULT_FRAME_SKIP, MAX_VIDEO_HEIGHT
+from config import DEFAULT_FRAME_SKIP
 
 logger = logging.getLogger(__name__)
 
@@ -75,42 +73,13 @@ def calculate_temporal_entropy(current_image, previous_image):
     return entropies
 
 
-def fetch_two_spaced_frames(
-    url, frame_skip=DEFAULT_FRAME_SKIP, max_height=None
-):
+def fetch_two_spaced_frames(url, frame_skip=DEFAULT_FRAME_SKIP):
     """Fetch two frames with some spacing between them from the YouTube live stream using yt-dlp."""
-    if max_height is None:
-        max_height = MAX_VIDEO_HEIGHT
-
-    # Ensure max_height is a valid integer
-    try:
-        max_height = int(max_height)
-        if max_height <= 0:
-            max_height = MAX_VIDEO_HEIGHT
-    except (ValueError, TypeError):
-        logger.warning(
-            f"Invalid max_height value: {max_height}, using default"
-        )
-        max_height = MAX_VIDEO_HEIGHT
-
-    logger.debug(f"Using max_height: {max_height} (type: {type(max_height)})")
-    try:
-        format_string = f"best[height<={max_height}]"
-        logger.debug(f"Format string: {format_string}")
-        ydl_opts = {
-            "format": format_string,
-            "quiet": True,
-            "no_warnings": True,
-        }
-    except Exception as e:
-        logger.warning(
-            f"Failed to create format string with max_height {max_height}: {e}"
-        )
-        ydl_opts = {
-            "format": "best",
-            "quiet": True,
-            "no_warnings": True,
-        }
+    ydl_opts = {
+        "format": "best",
+        "quiet": True,
+        "no_warnings": True,
+    }
     bitrate = None
     resolution = None
     try:
@@ -382,7 +351,7 @@ def fetch_two_spaced_frames(
     return None, None, bitrate, None
 
 
-def compute_entropy(video_id, max_height=None):
+def compute_entropy(video_id):
     """Compute entropy for a video and return the results.
 
     This is the core entropy computation logic that was extracted from
@@ -390,9 +359,7 @@ def compute_entropy(video_id, max_height=None):
     """
     logger.info(f"Computing entropy for video {video_id}")
     url = f"https://www.youtube.com/watch?v={video_id}"
-    frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(
-        url, max_height=max_height
-    )
+    frame1, frame2, bitrate, resolution = fetch_two_spaced_frames(url)
 
     if frame1 is not None and frame2 is not None:
         # Calculate color-aware spatial-entropy using the second frame

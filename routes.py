@@ -1,5 +1,3 @@
-"""Flask routes module for YouTube exporter."""
-
 import logging
 import threading
 import time
@@ -32,12 +30,11 @@ def periodic_update(
     video_id,
     interval=DEFAULT_INTERVAL,
     fetch_images=True,
-    max_height=None,
-    match=None,
+    match_objects=None,
 ):
     """Periodically update video metrics."""
     while True:
-        update_metrics(video_id, fetch_images, max_height, match)
+        update_metrics(video_id, fetch_images, match_objects)
         time.sleep(interval)
 
 
@@ -46,11 +43,13 @@ def periodic_update_channel(
     interval=DEFAULT_INTERVAL,
     fetch_images=True,
     disable_live=False,
-    match=None,
+    match_objects=None,
 ):
     """Periodically update channel metrics."""
     while True:
-        update_channel_metrics(channel_id, fetch_images, disable_live, match)
+        update_channel_metrics(
+            channel_id, fetch_images, disable_live, match_objects
+        )
         time.sleep(interval)
 
 
@@ -75,19 +74,36 @@ def metrics():
     # Get optional parameters
     fetch_images = request.args.get("fetch_images", "true").lower() == "true"
     disable_live = request.args.get("disable_live", "false").lower() == "true"
-    max_height_str = request.args.get("max_height")
-    max_height = None
-    if max_height_str:
-        try:
-            max_height = int(max_height_str)
-            if max_height <= 0:
-                max_height = None
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid max_height parameter: {max_height_str}")
-            max_height = None
-    match = request.args.get("match")  # Object to count in the image
+    match = request.args.get(
+        "match"
+    )  # Objects to count in the image (format: "object1:threshold1,object2:threshold2")
+    match_objects = {}
+    if match:
+        # Parse match parameter for multiple objects with individual thresholds
+        for item in match.split(","):
+            item = item.strip()
+            if ":" in item:
+                obj, thresh = item.split(":", 1)
+                obj = obj.strip()
+                try:
+                    thresh = float(thresh.strip())
+                    if thresh <= 0 or thresh > 1:
+                        logger.warning(
+                            f"Invalid threshold for {obj}: {thresh}, must be between 0 and 1, using default 0.1"
+                        )
+                        thresh = 0.1
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"Invalid threshold format for {obj}: {thresh}, using default 0.1"
+                    )
+                    thresh = 0.1
+            else:
+                obj = item
+                thresh = 0.1  # default threshold
+            match_objects[obj] = thresh
+
     logger.debug(
-        f"Request params: video_id={video_id}, channel_id={channel_id}, fetch_images={fetch_images}, match={match}"
+        f"Request params: video_id={video_id}, channel_id={channel_id}, fetch_images={fetch_images}, match_objects={match_objects}"
     )
     interval_str = request.args.get("interval", str(DEFAULT_INTERVAL))
     try:
@@ -111,8 +127,7 @@ def metrics():
         update_metrics(
             video_id,
             fetch_images=first_request_fetch_images,
-            max_height=max_height,
-            match=match,
+            match_objects=match_objects,
         )
 
         # Start periodic update if not already running or parameters changed
@@ -126,7 +141,7 @@ def metrics():
         ):
             metrics.threads[thread_key] = threading.Thread(
                 target=periodic_update,
-                args=(video_id, interval, fetch_images, max_height, match),
+                args=(video_id, interval, fetch_images, match_objects),
                 daemon=True,
             )
             metrics.threads[thread_key].start()
@@ -142,7 +157,7 @@ def metrics():
             channel_id,
             fetch_images=False,
             disable_live=disable_live,
-            match=None,
+            match_objects={},
         )
 
         # Start periodic update if not already running or parameters changed
@@ -156,7 +171,13 @@ def metrics():
         ):
             metrics.threads[thread_key] = threading.Thread(
                 target=periodic_update_channel,
-                args=(channel_id, interval, fetch_images, disable_live, match),
+                args=(
+                    channel_id,
+                    interval,
+                    fetch_images,
+                    disable_live,
+                    match_objects,
+                ),
                 daemon=True,
             )
             metrics.threads[thread_key].start()
@@ -182,31 +203,6 @@ youtube_exporter_endpoint_error_info{{endpoint="/metrics",error_message="{str(e)
 def health():
     """Health check endpoint."""
     return Response("OK", status=200)
-
-
-@app.route("/")
-def index():
-    """Root endpoint with usage information."""
-    usage_info = """
-YouTube Exporter
-
-Usage:
-- /metrics?video_id=VIDEO_ID - Get metrics for a specific video
-- /metrics?channel=CHANNEL_ID - Get metrics for a specific channel
-- /health - Health check endpoint
-
-Optional parameters:
-- fetch_images=true/false - Whether to fetch and analyze video frames (default: true)
-- disable_live=true/false - Whether to disable live stream detection for channels (default: false)
-- interval=SECONDS - Update interval in seconds (default: 300, minimum: 30)
-- match=OBJECT - Count identifiable objects in the image (e.g., match=paraglider)
-
-Examples:
-- /metrics?video_id=dQw4w9WgXcQ
-- /metrics?channel=UCuAXFkgsw1L7xaCfnd5JJOw
-- /metrics?video_id=dQw4w9WgXcQ&fetch_images=false&interval=60
-"""
-    return Response(usage_info, mimetype="text/plain")
 
 
 def get_flask_app():

@@ -1,5 +1,3 @@
-"""Metrics collection and Prometheus module for YouTube exporter."""
-
 import logging
 import os
 import threading
@@ -752,7 +750,7 @@ def process_channel_data(channel, live_videos, fetch_images=True):
     }
 
 
-def compute_and_store_entropy(video_id, title=None, max_height=None):
+def compute_and_store_entropy(video_id, title=None):
     """Compute entropy for a video using entropy.py and store results in global entropy_data.
     Returns the high-resolution frame for potential reuse in object detection.
     """
@@ -760,7 +758,7 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
 
     try:
         # Compute entropy using the dedicated entropy module
-        result = compute_entropy(video_id, max_height)
+        result = compute_entropy(video_id)
         if result and len(result) == 5:
             spatial_entropy, temporal_entropy, bitrate, resolution, frame2 = (
                 result
@@ -787,16 +785,15 @@ def compute_and_store_entropy(video_id, title=None, max_height=None):
             active_entropy_computation.discard(video_id)
 
 
-def compute_and_store_objects(video_id, object_type, max_height=None):
-    """Compute object detection for a video and store it in the global object_data.
+def compute_and_store_objects(video_id, objects_to_thresholds):
+    """Compute object detection for multiple objects in a video and store results in the global object_data.
     Tries to reuse high-resolution frame from entropy calculation if available.
     """
     global object_data, active_object_detection, entropy_data
 
-    key = f"{video_id}_{object_type}"
     try:
         logger.debug(
-            f"Computing object detection for video {video_id}, object_type: {object_type}"
+            f"Computing object detection for video {video_id}, objects: {list(objects_to_thresholds.keys())}"
         )
 
         # Check if we have a reusable high-resolution frame from recent entropy calculation
@@ -821,27 +818,32 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
                     f"No entropy data available for {video_id}, will capture new frame"
                 )
 
-        object_count = count_objects_in_video(
-            video_id, object_type, max_height, reuse_frame=reuse_frame
+        # Process all objects in one pass using the object detection function
+        object_counts = count_objects_in_video(
+            video_id, objects_to_thresholds, reuse_frame=reuse_frame
         )
 
-        if object_count is not None:
+        if object_counts is not None:
             with object_data_lock:
                 if video_id not in object_data:
                     object_data[video_id] = {}
-                object_data[video_id][object_type] = {
-                    "object_count": object_count,
-                    "timestamp": time.time(),
-                }
-            logger.info(
-                f"Stored object detection for {video_id}: {object_count} '{object_type}' objects"
-            )
-            return object_count
+
+                # Store results for each object type
+                for obj_type, count in object_counts.items():
+                    object_data[video_id][obj_type] = {
+                        "object_count": count,
+                        "timestamp": time.time(),
+                    }
+                    logger.info(
+                        f"Stored object detection for {video_id}: {count} '{obj_type}' objects"
+                    )
+
+            return object_counts
         else:
             logger.warning(f"Failed to detect objects for {video_id}")
             return None
     except Exception as e:
-        logger.error(f"Exception in compute_and_store_objects: {e}")
+        logger.error(f"Exception in compute_and_store_multiple_objects: {e}")
         import traceback
 
         logger.debug(f"Full traceback: {traceback.format_exc()}")
@@ -849,7 +851,9 @@ def compute_and_store_objects(video_id, object_type, max_height=None):
     finally:
         # Always remove from active set when done (success or failure)
         with active_detection_lock:
-            active_object_detection.discard(key)
+            for obj_type in objects_to_thresholds.keys():
+                key = f"{video_id}_{obj_type}"
+                active_object_detection.discard(key)
 
 
 def process_video_data_for_channel(video, fetch_images=True):
@@ -907,7 +911,7 @@ def process_video_data_for_channel(video, fetch_images=True):
 
 
 def update_channel_metrics(
-    channel_id, fetch_images=True, disable_live=False, match=None
+    channel_id, fetch_images=True, disable_live=False, match_objects=None
 ):
     """Fetch channel data and live streams, update storage."""
     global channel_metrics_data, metrics_data, entropy_data
@@ -986,14 +990,14 @@ def update_channel_metrics(
                     active_entropy_computation.add(video_id)
                 thread = threading.Thread(
                     target=compute_and_store_entropy,
-                    args=(video_id, stream_title, None),
+                    args=(video_id, stream_title),
                     daemon=True,
                 )
                 thread.start()
 
-    # If match is provided, also do object detection for live streams
+    # If match_objects is provided, also do object detection for live streams
     # Only for streams that have valid titles
-    if match and not disable_live:
+    if match_objects and not disable_live:
         import threading
 
         for stream in channel_snapshot["live_streams"]:
@@ -1001,49 +1005,63 @@ def update_channel_metrics(
             stream_title = stream.get("title", "")
             if video_id and stream.get("live_binary") == 1 and stream_title:
                 # Object counting mode - check if we need to start background detection
-                key = f"{video_id}_{match}"
+                # Check if any of the objects need fresh detection
+                need_detection = False
                 with object_data_lock:
-                    if (
-                        video_id in object_data
-                        and match in object_data[video_id]
-                    ):
-                        stored_data = object_data[video_id][match]
-                        # Check if existing data is recent enough
+                    for obj_type in match_objects.keys():
+                        if (
+                            video_id not in object_data
+                            or obj_type not in object_data[video_id]
+                        ):
+                            need_detection = True
+                            break
+                        stored_data = object_data[video_id][obj_type]
                         age = time.time() - stored_data.get("timestamp", 0)
-                        if age < 300:  # Use existing data if recent
+                        if age >= 300:  # Data is stale
+                            need_detection = True
                             logger.debug(
-                                f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old"
+                                f"Existing object data for {obj_type} is stale (age: {age:.0f}s), will recompute"
                             )
-                            continue
-                        else:
-                            logger.debug(
-                                f"Existing object data is stale (age: {age:.0f}s), will recompute"
-                            )
+                            break
 
-                # Check if detection is already in progress (with thread-safe add)
-                if key in active_object_detection:
-                    logger.debug(
-                        f"Object detection already in progress for {video_id}, object_type: {match}"
-                    )
+                    if not need_detection:
+                        logger.debug(
+                            f"All object data for {video_id} is fresh, skipping detection"
+                        )
+                        continue
+
+                # Check if any detection is already in progress for any of the requested objects
+                any_in_progress = False
+                for obj_type in match_objects.keys():
+                    key = f"{video_id}_{obj_type}"
+                    if key in active_object_detection:
+                        logger.debug(
+                            f"Object detection already in progress for {video_id}, object_type: {obj_type}"
+                        )
+                        any_in_progress = True
+                        break
+
+                if any_in_progress:
                     continue
 
-                # Add to active set BEFORE starting thread to prevent race conditions
+                # Add all object types to active set BEFORE starting thread
                 with active_detection_lock:
-                    active_object_detection.add(key)
+                    for obj_type in match_objects.keys():
+                        key = f"{video_id}_{obj_type}"
+                        active_object_detection.add(key)
+
                 logger.info(
-                    f"Starting object detection for {video_id}, object_type: {match}"
+                    f"Starting multi-object detection for {video_id}, objects: {list(match_objects.keys())}"
                 )
                 logger.debug(
                     f"CONCURRENCY DEBUG: Active object detection tasks: {len(active_object_detection)}, Active entropy tasks: {len(active_entropy_computation)}"
                 )
-                logger.debug(
-                    f"CONCURRENCY DEBUG: Current active object keys: {list(active_object_detection)}"
-                )
+
                 thread = threading.Thread(
                     target=compute_and_store_objects,
-                    args=(video_id, match, None),
+                    args=(video_id, match_objects),
                     daemon=True,
-                    name=f"ChannelObjectDetection-{video_id}-{match}",
+                    name=f"ChannelObjectDetection-{video_id}-{'-'.join(match_objects.keys())}",
                 )
                 thread.start()
 
@@ -1059,7 +1077,7 @@ def update_channel_metrics(
     )
 
 
-def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
+def update_metrics(video_id, fetch_images=True, match_objects=None):
     """Fetch video data and frames, calculate metrics, update storage."""
     global metrics_data, channel_metrics_data, entropy_data
     timestamp = time.time()
@@ -1192,7 +1210,7 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
 
                         thread = threading.Thread(
                             target=compute_and_store_entropy,
-                            args=(video_id, api_data.get("title"), max_height),
+                            args=(video_id, api_data.get("title")),
                             daemon=True,
                         )
                         thread.start()
@@ -1213,64 +1231,81 @@ def update_metrics(video_id, fetch_images=True, max_height=None, match=None):
 
                     thread = threading.Thread(
                         target=compute_and_store_entropy,
-                        args=(video_id, api_data.get("title"), max_height),
+                        args=(video_id, api_data.get("title")),
                         daemon=True,
                     )
                     thread.start()
 
-        # If match is provided, also do object detection
-        if match and api_data is not None:
+        # If match_objects is provided, also do object detection
+        if match_objects and api_data is not None:
             logger.debug(
-                f"Object detection requested for video_id={video_id}, match={match}"
+                f"Object detection requested for video_id={video_id}, objects: {list(match_objects.keys())}"
             )
             # Object counting mode - check if we need to start background detection
-            key = f"{video_id}_{match}"
+            # Check if any of the objects need fresh detection
+            need_detection = False
             with object_data_lock:
-                if video_id in object_data and match in object_data[video_id]:
-                    stored_data = object_data[video_id][match]
-                    # Check if existing data is recent enough
+                for obj_type in match_objects.keys():
+                    if (
+                        video_id not in object_data
+                        or obj_type not in object_data[video_id]
+                    ):
+                        need_detection = True
+                        break
+                    stored_data = object_data[video_id][obj_type]
                     age = time.time() - stored_data.get("timestamp", 0)
-                    if age < 300:  # Use existing data if recent
+                    if age >= 300:  # Data is stale
+                        need_detection = True
                         logger.debug(
-                            f"Using existing object data for {video_id}, object_type: {match}, data is {age:.0f}s old"
+                            f"Existing object data for {obj_type} is stale (age: {age:.0f}s), will recompute"
                         )
-                        return
-                    else:
-                        logger.debug(
-                            f"Existing object data is stale (age: {age:.0f}s), will recompute"
-                        )
+                        break
 
-            # Check if detection is already in progress (with thread-safe add)
-            if key in active_object_detection:
-                logger.debug(
-                    f"Object detection already in progress for {video_id}, object_type: {match}"
-                )
+                if not need_detection:
+                    logger.debug(
+                        f"All object data for {video_id} is fresh, skipping detection"
+                    )
+                    return
+
+            # Check if any detection is already in progress for any of the requested objects
+            any_in_progress = False
+            for obj_type in match_objects.keys():
+                key = f"{video_id}_{obj_type}"
+                if key in active_object_detection:
+                    logger.debug(
+                        f"Object detection already in progress for {video_id}, object_type: {obj_type}"
+                    )
+                    any_in_progress = True
+                    break
+
+            if any_in_progress:
                 return
 
-            # Add to active set BEFORE starting thread to prevent race conditions
+            # Add all object types to active set BEFORE starting thread
             with active_detection_lock:
-                active_object_detection.add(key)
+                for obj_type in match_objects.keys():
+                    key = f"{video_id}_{obj_type}"
+                    active_object_detection.add(key)
+
             logger.info(
-                f"Starting object detection for {video_id}, object_type: {match}"
+                f"Starting multi-object detection for {video_id}, objects: {list(match_objects.keys())}"
             )
             logger.debug(
                 f"CONCURRENCY DEBUG: Active object detection tasks: {len(active_object_detection)}, Active entropy tasks: {len(active_entropy_computation)}"
             )
-            logger.debug(
-                f"CONCURRENCY DEBUG: Current active object keys: {list(active_object_detection)}"
-            )
+
             import threading
 
             thread = threading.Thread(
                 target=compute_and_store_objects,
-                args=(video_id, match, max_height),
+                args=(video_id, match_objects),
                 daemon=True,
-                name=f"ObjectDetection-{video_id}-{match}",
+                name=f"ObjectDetection-{video_id}-{'-'.join(match_objects.keys())}",
             )
             thread.start()
         else:
             logger.debug(
-                f"No 'match' parameter provided, skipping object detection for {video_id}"
+                f"No 'match_objects' parameter provided, skipping object detection for {video_id}"
             )
     else:
         logger.info(
