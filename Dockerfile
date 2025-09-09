@@ -20,4 +20,4 @@ EXPOSE 9473
 # Prefer FFmpeg backend in OpenCV to avoid GStreamer
 ENV OPENCV_VIDEOIO_PRIORITY_FFMPEG=1
 
-CMD ["python", "main.py"]
+CMD ["./app.py"]
