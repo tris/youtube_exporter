@@ -20,3 +20,4 @@ black
 isort
 flake8
 autoflake
+python-dotenv>=1.0.0
