@@ -6,7 +6,7 @@ import traceback
 
 import cv2
 import yt_dlp
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from config import DEBUG_DIR, MODEL_CACHE_DIR
 
@@ -24,6 +24,50 @@ logger = logging.getLogger(__name__)
 _model = None
 _processor = None
 _inference_lock = threading.Lock()  # Ensure thread-safe model inference
+
+
+def draw_text_with_outline(
+    draw,
+    position,
+    text,
+    fill_color,
+    outline_color="black",
+    outline_width=2,
+    font_size=16,
+):
+    """
+    Draw text with a black outline to ensure visibility on any background.
+
+    Args:
+        draw: PIL ImageDraw object
+        position: (x, y) tuple for text position
+        text: Text to draw
+        fill_color: Color for the main text
+        outline_color: Color for the outline (default: black)
+        outline_width: Width of the outline (default: 2)
+        font_size: Size of the font (default: 16)
+    """
+    # Load a bold font if available, otherwise default
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", size=font_size)
+    except (OSError, IOError):
+        try:
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                size=font_size,
+            )
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+
+    x, y = position
+    # Draw outline by drawing text in all 8 directions around the main position
+    for dx in range(-outline_width, outline_width + 1):
+        for dy in range(-outline_width, outline_width + 1):
+            if dx == 0 and dy == 0:
+                continue  # Skip the center position for now
+            draw.text((x + dx, y + dy), text, fill=outline_color, font=font)
+    # Draw the main text on top
+    draw.text((x, y), text, fill=fill_color, font=font)
 
 
 def get_color_for_object(obj_type: str) -> str:
@@ -343,10 +387,11 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                                 [x1, y1, x2, y2], outline=color, width=3
                             )
                             # Small inline score near the box (may overlap)
-                            draw.text(
+                            draw_text_with_outline(
+                                draw,
                                 (x1, max(0, y1 - 12)),
                                 f"{score:.2f}",
-                                fill=color,
+                                color,
                             )
 
                         # Add overlay entries
@@ -388,8 +433,8 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                 tl_x, tl_y = 10, 10
                 line_h = 16
                 for obj_type, count, color in overlay_lines_top_left:
-                    draw.text(
-                        (tl_x, tl_y), f"{obj_type} (n={count})", fill=color
+                    draw_text_with_outline(
+                        draw, (tl_x, tl_y), f"{obj_type} (n={count})", color
                     )
                     tl_y += line_h
 
@@ -402,10 +447,11 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                     - 10,
                 )
                 for obj_type, score_list, color in overlay_lines_bottom_left:
-                    draw.text(
+                    draw_text_with_outline(
+                        draw,
                         (bl_x, bl_y),
                         f"{obj_type} scores: {', '.join(score_list)}",
-                        fill=color,
+                        color,
                     )
                     bl_y += line_h
 
