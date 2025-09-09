@@ -2,6 +2,8 @@
 
 import logging
 import os
+import signal
+import sys
 
 from config import FLASK_HOST, FLASK_PORT, validate_config
 from routes import get_flask_app
@@ -15,9 +17,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def signal_handler(signum, frame):
+    """Handle SIGTERM and SIGINT by exiting immediately."""
+    logger.info(f"Received signal {signum}, exiting immediately")
+    sys.exit(0)
+
+
 def main():
     # Validate configuration before starting
     validate_config()
+
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
     # Get the Flask app from routes module
     app = get_flask_app()
