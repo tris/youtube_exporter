@@ -337,9 +337,8 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                 else list(boxes_raw)
             )
 
-            # Prepare combined debug image and overlay structures (no object types in filenames)
+            # Prepare combined debug image and overlay structures
             timestamp = int(time.time())
-            filename_base = f"{video_id}_{timestamp}"
             debug_image = None
             draw = None
             overlay_lines_top_left = (
@@ -416,6 +415,11 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                 logger.info(
                     f"Detected {object_count} '{obj_type}' objects in {video_id} (threshold: {threshold})"
                 )
+
+        # Compute total count of detections
+        total_count = sum(object_counts.values())
+        timestamp = int(time.time())
+        filename_base = f"{video_id}_{total_count}_{timestamp}"
 
         # Save combined debug images (original and annotated)
         if DEBUG_DIR:
