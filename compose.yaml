@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    ports:
+      - ${PORT:-9473}:${PORT:-9473}
+    volumes:
+      - .:/app
+      - ./cache:/app/cache
+      - ./debug:/app/debug
+    env_file:
+      - .env
+    environment:
+      - MODEL_CACHE_DIR=/app/cache
+      - DEBUG_DIR=/app/debug
+      - PORT=${PORT:-9473}
+    working_dir: /app
+    command: flask run --host=0.0.0.0 --port=${PORT:-9473} --reload
+    restart: unless-stopped
+    stop_grace_period: 1s
