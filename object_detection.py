@@ -70,6 +70,49 @@ def draw_text_with_outline(
     draw.text((x, y), text, fill=fill_color, font=font)
 
 
+def draw_dashed_rectangle(draw, xy, outline, width=3, dash=(10, 5)):
+    """
+    Draw a dashed rectangle using line segments.
+
+    Args:
+        draw: PIL ImageDraw object
+        xy: Bounding box as (x1, y1, x2, y2)
+        outline: Color for the outline
+        width: Line width
+        dash: Tuple of (dash_length, gap_length)
+    """
+    x1, y1, x2, y2 = xy
+    dash_len, gap_len = dash
+
+    # Draw top side
+    x = x1
+    while x < x2:
+        end_x = min(x + dash_len, x2)
+        draw.line([(x, y1), (end_x, y1)], fill=outline, width=width)
+        x += dash_len + gap_len
+
+    # Draw bottom side
+    x = x1
+    while x < x2:
+        end_x = min(x + dash_len, x2)
+        draw.line([(x, y2), (end_x, y2)], fill=outline, width=width)
+        x += dash_len + gap_len
+
+    # Draw left side
+    y = y1
+    while y < y2:
+        end_y = min(y + dash_len, y2)
+        draw.line([(x1, y), (x1, end_y)], fill=outline, width=width)
+        y += dash_len + gap_len
+
+    # Draw right side
+    y = y1
+    while y < y2:
+        end_y = min(y + dash_len, y2)
+        draw.line([(x2, y), (x2, end_y)], fill=outline, width=width)
+        y += dash_len + gap_len
+
+
 def get_color_for_object(obj_type: str) -> str:
     """
     Deterministically choose a color for a given object type name.
@@ -372,19 +415,30 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                 # Debug draw (accumulate on a single image)
                 if DEBUG_DIR and draw is not None:
                     try:
-                        # Prepare boxes and scores for this object type from global lists
-                        boxes = [boxes_list[j] for j in valid_indices]
-                        scores = [scores_list[j] for j in valid_indices]
-
                         # Choose color per object type
                         color = get_color_for_object(obj_type)
 
-                        # Draw bounding boxes and inline scores in the object's color
-                        for box, score in zip(boxes, scores):
+                        # Draw bounding boxes and inline scores for all valid detections and invalid detections with score >= 0.1
+                        for j in label_indices:
+                            score = scores_list[j]
+                            box = boxes_list[j]
                             x1, y1, x2, y2 = [int(coord) for coord in box]
-                            draw.rectangle(
-                                [x1, y1, x2, y2], outline=color, width=3
-                            )
+
+                            # Draw solid rectangle for valid detections, dashed for invalid (if score >= 0.1)
+                            if j in valid_indices:
+                                draw.rectangle(
+                                    [x1, y1, x2, y2], outline=color, width=3
+                                )
+                            elif score >= 0.1:
+                                draw_dashed_rectangle(
+                                    draw,
+                                    [x1, y1, x2, y2],
+                                    outline=color,
+                                    width=3,
+                                )
+                            else:
+                                continue  # Skip invalid detections with score < 0.1
+
                             # Small inline score near the box (may overlap)
                             draw_text_with_outline(
                                 draw,
@@ -393,13 +447,20 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                                 color,
                             )
 
-                        # Add overlay entries
+                        # Add overlay entries (only for valid detections)
                         overlay_lines_top_left.append(
                             (obj_type, object_count, color)
                         )
-                        if scores:
+                        if valid_indices:
+                            valid_scores = [
+                                scores_list[j] for j in valid_indices
+                            ]
                             overlay_lines_bottom_left.append(
-                                (obj_type, [f"{s:.2f}" for s in scores], color)
+                                (
+                                    obj_type,
+                                    [f"{s:.2f}" for s in valid_scores],
+                                    color,
+                                )
                             )
                     except Exception as e:
                         logger.error(
