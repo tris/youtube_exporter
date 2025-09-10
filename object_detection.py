@@ -219,13 +219,16 @@ def check_opencv_ffmpeg_support():
     return ffmpeg_enabled, backends
 
 
-def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
+def count_objects_in_video(
+    video_id, objects_to_thresholds, reuse_frame=None, debug=False
+):
     """Count objects of specified types in a high-resolution snapshot using OWLv2.
 
     Args:
         video_id: YouTube video ID
         objects_to_thresholds: Dict of {object_type: threshold} pairs or single object_type string
         reuse_frame: Optional PIL Image to reuse instead of capturing new frame
+        debug: Whether to save debug images (only if DEBUG_DIR is also set)
     """
     import threading
 
@@ -390,7 +393,7 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
             overlay_lines_bottom_left = (
                 []
             )  # list of tuples (obj_type, [scores], color)
-            if DEBUG_DIR:
+            if DEBUG_DIR and debug:
                 os.makedirs(DEBUG_DIR, exist_ok=True)
                 debug_image = image.copy()
                 draw = ImageDraw.Draw(debug_image)
@@ -413,7 +416,7 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
                 object_counts[obj_type] = object_count
 
                 # Debug draw (accumulate on a single image)
-                if DEBUG_DIR and draw is not None:
+                if DEBUG_DIR and debug and draw is not None:
                     try:
                         # Choose color per object type
                         color = get_color_for_object(obj_type)
@@ -483,7 +486,7 @@ def count_objects_in_video(video_id, objects_to_thresholds, reuse_frame=None):
         filename_base = f"{video_id}_{total_count}_{timestamp}"
 
         # Save combined debug images (original and annotated)
-        if DEBUG_DIR:
+        if DEBUG_DIR and debug:
             try:
                 original_filepath = os.path.join(
                     DEBUG_DIR, f"{filename_base}.png"

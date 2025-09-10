@@ -31,10 +31,11 @@ def periodic_update(
     interval=DEFAULT_INTERVAL,
     fetch_images=True,
     match_objects=None,
+    debug=False,
 ):
     """Periodically update video metrics."""
     while True:
-        update_metrics(video_id, fetch_images, match_objects)
+        update_metrics(video_id, fetch_images, match_objects, debug)
         time.sleep(interval)
 
 
@@ -44,11 +45,12 @@ def periodic_update_channel(
     fetch_images=True,
     disable_live=False,
     match_objects=None,
+    debug=False,
 ):
     """Periodically update channel metrics."""
     while True:
         update_channel_metrics(
-            channel_id, fetch_images, disable_live, match_objects
+            channel_id, fetch_images, disable_live, match_objects, debug
         )
         time.sleep(interval)
 
@@ -74,6 +76,7 @@ def metrics():
     # Get optional parameters
     fetch_images = request.args.get("fetch_images", "true").lower() == "true"
     disable_live = request.args.get("disable_live", "false").lower() == "true"
+    debug = request.args.get("debug", "false").lower() in ("true", "1")
     match = request.args.get(
         "match"
     )  # Objects to count in the image (format: "object1:threshold1,object2:threshold2")
@@ -103,7 +106,7 @@ def metrics():
             match_objects[obj] = thresh
 
     logger.debug(
-        f"Request params: video_id={video_id}, channel_id={channel_id}, fetch_images={fetch_images}, match_objects={match_objects}"
+        f"Request params: video_id={video_id}, channel_id={channel_id}, fetch_images={fetch_images}, debug={debug}, match_objects={match_objects}"
     )
     interval_str = request.args.get("interval", str(DEFAULT_INTERVAL))
     try:
@@ -128,10 +131,11 @@ def metrics():
             video_id,
             fetch_images=first_request_fetch_images,
             match_objects=match_objects,
+            debug=debug,
         )
 
         # Start periodic update if not already running or parameters changed
-        thread_key = f"video_{video_id}_{fetch_images}_{interval}"
+        thread_key = f"video_{video_id}_{fetch_images}_{debug}_{interval}"
         if not hasattr(metrics, "threads"):
             metrics.threads = {}
 
@@ -141,7 +145,7 @@ def metrics():
         ):
             metrics.threads[thread_key] = threading.Thread(
                 target=periodic_update,
-                args=(video_id, interval, fetch_images, match_objects),
+                args=(video_id, interval, fetch_images, match_objects, debug),
                 daemon=True,
             )
             metrics.threads[thread_key].start()
@@ -158,10 +162,11 @@ def metrics():
             fetch_images=False,
             disable_live=disable_live,
             match_objects={},
+            debug=debug,
         )
 
         # Start periodic update if not already running or parameters changed
-        thread_key = f"channel_{channel_id}_{fetch_images}_{disable_live}_{interval}_{match}"
+        thread_key = f"channel_{channel_id}_{fetch_images}_{disable_live}_{debug}_{interval}_{match}"
         if not hasattr(metrics, "threads"):
             metrics.threads = {}
 
@@ -177,6 +182,7 @@ def metrics():
                     fetch_images,
                     disable_live,
                     match_objects,
+                    debug,
                 ),
                 daemon=True,
             )

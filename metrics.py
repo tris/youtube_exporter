@@ -785,7 +785,7 @@ def compute_and_store_entropy(video_id, title=None):
             active_entropy_computation.discard(video_id)
 
 
-def compute_and_store_objects(video_id, objects_to_thresholds):
+def compute_and_store_objects(video_id, objects_to_thresholds, debug=False):
     """Compute object detection for multiple objects in a video and store results in the global object_data.
     Tries to reuse high-resolution frame from entropy calculation if available.
     """
@@ -820,7 +820,10 @@ def compute_and_store_objects(video_id, objects_to_thresholds):
 
         # Process all objects in one pass using the object detection function
         object_counts = count_objects_in_video(
-            video_id, objects_to_thresholds, reuse_frame=reuse_frame
+            video_id,
+            objects_to_thresholds,
+            reuse_frame=reuse_frame,
+            debug=debug,
         )
 
         if object_counts is not None:
@@ -911,7 +914,11 @@ def process_video_data_for_channel(video, fetch_images=True):
 
 
 def update_channel_metrics(
-    channel_id, fetch_images=True, disable_live=False, match_objects=None
+    channel_id,
+    fetch_images=True,
+    disable_live=False,
+    match_objects=None,
+    debug=False,
 ):
     """Fetch channel data and live streams, update storage."""
     global channel_metrics_data, metrics_data, entropy_data
@@ -1059,7 +1066,7 @@ def update_channel_metrics(
 
                 thread = threading.Thread(
                     target=compute_and_store_objects,
-                    args=(video_id, match_objects),
+                    args=(video_id, match_objects, debug),
                     daemon=True,
                     name=f"ChannelObjectDetection-{video_id}-{'-'.join(match_objects.keys())}",
                 )
@@ -1077,7 +1084,9 @@ def update_channel_metrics(
     )
 
 
-def update_metrics(video_id, fetch_images=True, match_objects=None):
+def update_metrics(
+    video_id, fetch_images=True, match_objects=None, debug=False
+):
     """Fetch video data and frames, calculate metrics, update storage."""
     global metrics_data, channel_metrics_data, entropy_data
     timestamp = time.time()
@@ -1298,7 +1307,7 @@ def update_metrics(video_id, fetch_images=True, match_objects=None):
 
             thread = threading.Thread(
                 target=compute_and_store_objects,
-                args=(video_id, match_objects),
+                args=(video_id, match_objects, debug),
                 daemon=True,
                 name=f"ObjectDetection-{video_id}-{'-'.join(match_objects.keys())}",
             )

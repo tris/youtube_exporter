@@ -92,12 +92,15 @@ A Prometheus exporter that monitors YouTube videos and live streams for image en
 - `video_id`: YouTube video ID (11 characters)
 - `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
 - `match` (optional): Object types to detect and count, with optional confidence thresholds (format: "object1:threshold1,object2:threshold2", e.g., "person:0.25,car:0.15"). Default threshold: 0.1
+- `debug` (optional): Enable debug image saving when DEBUG_DIR is set (default: false)
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
 
 ### Channel Metrics
 - `channel`: YouTube channel ID (UC followed by 22 characters)
-- `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
 - `disable_live` (optional): Disable live stream detection for channels (default: false)
+- `fetch_images` (optional): Enable/disable image fetching for entropy calculation (default: true)
+- `match` (optional): Object types to detect and count, with optional confidence thresholds (format: "object1:threshold1,object2:threshold2", e.g., "person:0.25,car:0.15"). Default threshold: 0.1
+- `debug` (optional): Enable debug image saving when DEBUG_DIR is set (default: false)
 - `interval` (optional): Fetch interval in seconds (default: 300, min: 30)
 
 ### Performance Notes
