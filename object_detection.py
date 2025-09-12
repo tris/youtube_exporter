@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Global model variables - loaded once on import
 _model = None
 _processor = None
-_inference_lock = threading.Lock()  # Ensure thread-safe model inference
+# Note: Model inference is thread-safe on CPU when model is in eval mode
 
 
 def draw_text_with_outline(
@@ -340,145 +340,145 @@ def count_objects_in_video(
             f"Input tensor devices: {[inputs[k].device for k in inputs if hasattr(inputs[k], 'device')]}"
         )
 
-        # Perform object detection with thread safety
-        with _inference_lock:
-            logger.debug("Running model inference for objects...")
-            # Use no_grad() to prevent memory accumulation during inference
-            with torch.no_grad():
-                outputs = model(**inputs)
-            logger.debug(f"Model inference completed successfully for objects")
+        # Perform object detection (model is in eval mode, should be thread-safe for CPU inference)
+        logger.debug("Running model inference for objects...")
+        inference_start = time.time()
+        # Use no_grad() to prevent memory accumulation during inference
+        with torch.no_grad():
+            outputs = model(**inputs)
+        inference_duration = time.time() - inference_start
+        logger.info(
+            f"[THREAD-{thread_id}] Model inference completed in {inference_duration:.3f}s for {video_id}"
+        )
+        logger.debug(f"Model inference completed successfully for objects")
 
-            # Get predictions
-            target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
-            logger.debug(f"Target sizes: {target_sizes}")
+        # Get predictions
+        target_sizes = torch.tensor([image.size[::-1]])  # (height, width)
+        logger.debug(f"Target sizes: {target_sizes}")
 
-            results = processor.post_process_grounded_object_detection(
-                outputs,
-                target_sizes=target_sizes,
-                threshold=0.0,  # Use lowest threshold, filter later
-            )
-            logger.debug("Post-processing completed for objects")
+        results = processor.post_process_grounded_object_detection(
+            outputs,
+            target_sizes=target_sizes,
+            threshold=0.0,  # Use lowest threshold, filter later
+        )
+        logger.debug("Post-processing completed for objects")
 
-            # Count detected objects for each type with individual thresholds
-            predictions = results[0]
-            object_counts = {}
+        # Count detected objects for each type with individual thresholds
+        predictions = results[0]
+        object_counts = {}
 
-            # Extract predictions as lists and group by label (prompt index)
-            labels_raw = predictions.get("labels", [])
-            scores_raw = predictions.get("scores", [])
-            boxes_raw = predictions.get("boxes", [])
-            labels_list = (
-                labels_raw.tolist()
-                if hasattr(labels_raw, "tolist")
-                else list(labels_raw)
-            )
-            scores_list = (
-                scores_raw.tolist()
-                if hasattr(scores_raw, "tolist")
-                else list(scores_raw)
-            )
-            boxes_list = (
-                boxes_raw.tolist()
-                if hasattr(boxes_raw, "tolist")
-                else list(boxes_raw)
-            )
+        # Extract predictions as lists and group by label (prompt index)
+        labels_raw = predictions.get("labels", [])
+        scores_raw = predictions.get("scores", [])
+        boxes_raw = predictions.get("boxes", [])
+        labels_list = (
+            labels_raw.tolist()
+            if hasattr(labels_raw, "tolist")
+            else list(labels_raw)
+        )
+        scores_list = (
+            scores_raw.tolist()
+            if hasattr(scores_raw, "tolist")
+            else list(scores_raw)
+        )
+        boxes_list = (
+            boxes_raw.tolist()
+            if hasattr(boxes_raw, "tolist")
+            else list(boxes_raw)
+        )
 
-            # Prepare combined debug image and overlay structures
-            timestamp = int(time.time())
-            debug_image = None
-            draw = None
-            overlay_lines_top_left = (
-                []
-            )  # list of tuples (obj_type, count, color)
-            overlay_lines_bottom_left = (
-                []
-            )  # list of tuples (obj_type, [scores], color)
-            if DEBUG_DIR and debug:
-                os.makedirs(DEBUG_DIR, exist_ok=True)
-                debug_image = image.copy()
-                draw = ImageDraw.Draw(debug_image)
+        # Prepare combined debug image and overlay structures
+        timestamp = int(time.time())
+        debug_image = None
+        draw = None
+        overlay_lines_top_left = []  # list of tuples (obj_type, count, color)
+        overlay_lines_bottom_left = (
+            []
+        )  # list of tuples (obj_type, [scores], color)
+        if DEBUG_DIR and debug:
+            os.makedirs(DEBUG_DIR, exist_ok=True)
+            debug_image = image.copy()
+            draw = ImageDraw.Draw(debug_image)
 
-            # Process each object type with its specific threshold
-            for i, (obj_type, threshold) in enumerate(
-                objects_to_thresholds.items()
-            ):
-                # Indices predicted for this prompt index i
-                label_indices = [
-                    j for j, lab in enumerate(labels_list) if lab == i
-                ]
+        # Process each object type with its specific threshold
+        for i, (obj_type, threshold) in enumerate(
+            objects_to_thresholds.items()
+        ):
+            # Indices predicted for this prompt index i
+            label_indices = [
+                j for j, lab in enumerate(labels_list) if lab == i
+            ]
 
-                # Apply threshold filtering per object type
-                valid_indices = [
-                    j for j in label_indices if scores_list[j] >= threshold
-                ]
-                object_count = len(valid_indices)
+            # Apply threshold filtering per object type
+            valid_indices = [
+                j for j in label_indices if scores_list[j] >= threshold
+            ]
+            object_count = len(valid_indices)
 
-                object_counts[obj_type] = object_count
+            object_counts[obj_type] = object_count
 
-                # Debug draw (accumulate on a single image)
-                if DEBUG_DIR and debug and draw is not None:
-                    try:
-                        # Choose color per object type
-                        color = get_color_for_object(obj_type)
+            # Debug draw (accumulate on a single image)
+            if DEBUG_DIR and debug and draw is not None:
+                try:
+                    # Choose color per object type
+                    color = get_color_for_object(obj_type)
 
-                        # Draw bounding boxes and inline scores for all valid detections and invalid detections with score >= 0.1
-                        for j in label_indices:
-                            score = scores_list[j]
-                            box = boxes_list[j]
-                            x1, y1, x2, y2 = [int(coord) for coord in box]
+                    # Draw bounding boxes and inline scores for all valid detections and invalid detections with score >= 0.1
+                    for j in label_indices:
+                        score = scores_list[j]
+                        box = boxes_list[j]
+                        x1, y1, x2, y2 = [int(coord) for coord in box]
 
-                            # Draw solid rectangle for valid detections, dashed for invalid (if score >= 0.1)
-                            if j in valid_indices:
-                                draw.rectangle(
-                                    [x1, y1, x2, y2], outline=color, width=3
-                                )
-                            elif score >= 0.1:
-                                draw_dashed_rectangle(
-                                    draw,
-                                    [x1, y1, x2, y2],
-                                    outline=color,
-                                    width=3,
-                                )
-                            else:
-                                continue  # Skip invalid detections with score < 0.1
-
-                            # Small inline score near the box (may overlap)
-                            draw_text_with_outline(
+                        # Draw solid rectangle for valid detections, dashed for invalid (if score >= 0.1)
+                        if j in valid_indices:
+                            draw.rectangle(
+                                [x1, y1, x2, y2], outline=color, width=3
+                            )
+                        elif score >= 0.1:
+                            draw_dashed_rectangle(
                                 draw,
-                                (x1, max(0, y1 - 12)),
-                                f"{score:.2f}",
+                                [x1, y1, x2, y2],
+                                outline=color,
+                                width=3,
+                            )
+                        else:
+                            continue  # Skip invalid detections with score < 0.1
+
+                        # Small inline score near the box (may overlap)
+                        draw_text_with_outline(
+                            draw,
+                            (x1, max(0, y1 - 12)),
+                            f"{score:.2f}",
+                            color,
+                        )
+
+                    # Add overlay entries (only for valid detections)
+                    overlay_lines_top_left.append(
+                        (obj_type, object_count, color)
+                    )
+                    if valid_indices:
+                        valid_scores = [scores_list[j] for j in valid_indices]
+                        overlay_lines_bottom_left.append(
+                            (
+                                obj_type,
+                                [f"{s:.2f}" for s in valid_scores],
                                 color,
                             )
-
-                        # Add overlay entries (only for valid detections)
-                        overlay_lines_top_left.append(
-                            (obj_type, object_count, color)
                         )
-                        if valid_indices:
-                            valid_scores = [
-                                scores_list[j] for j in valid_indices
-                            ]
-                            overlay_lines_bottom_left.append(
-                                (
-                                    obj_type,
-                                    [f"{s:.2f}" for s in valid_scores],
-                                    color,
-                                )
-                            )
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to prepare debug overlay for {obj_type}: {e}"
-                        )
-
-                if object_count > 0:
-                    valid_scores = [scores_list[j] for j in valid_indices]
-                    logger.debug(
-                        f"Detected {object_count} '{obj_type}' objects with scores: {[f'{s:.3f}' for s in valid_scores]} (threshold: {threshold})"
+                except Exception as e:
+                    logger.error(
+                        f"Failed to prepare debug overlay for {obj_type}: {e}"
                     )
 
-                logger.info(
-                    f"Detected {object_count} '{obj_type}' objects in {video_id} (threshold: {threshold})"
+            if object_count > 0:
+                valid_scores = [scores_list[j] for j in valid_indices]
+                logger.debug(
+                    f"Detected {object_count} '{obj_type}' objects with scores: {[f'{s:.3f}' for s in valid_scores]} (threshold: {threshold})"
                 )
+
+            logger.info(
+                f"Detected {object_count} '{obj_type}' objects in {video_id} (threshold: {threshold})"
+            )
 
         # Compute total count of detections
         total_count = sum(object_counts.values())

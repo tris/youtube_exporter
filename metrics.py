@@ -10,6 +10,7 @@ from prometheus_client.registry import Collector
 
 import quota
 from api_errors import api_errors
+from config import CACHE_THRESHOLD
 from entropy import compute_entropy
 from object_detection import count_objects_in_video
 from youtube_client import (
@@ -803,7 +804,8 @@ def compute_and_store_objects(video_id, objects_to_thresholds, debug=False):
                 entropy_info = entropy_data[video_id]
                 frame_age = time.time() - entropy_info.get("timestamp", 0)
                 if (
-                    frame_age < 300 and "reusable_frame" in entropy_info
+                    frame_age < CACHE_THRESHOLD
+                    and "reusable_frame" in entropy_info
                 ):  # Use frame if < 5 minutes old
                     reuse_frame = entropy_info["reusable_frame"]
                     logger.debug(
@@ -919,6 +921,7 @@ def update_channel_metrics(
     disable_live=False,
     match_objects=None,
     debug=False,
+    cache_threshold=300,
 ):
     """Fetch channel data and live streams, update storage."""
     global channel_metrics_data, metrics_data, entropy_data
@@ -975,8 +978,8 @@ def update_channel_metrics(
                             "timestamp", 0
                         )
                         if (
-                            age < 300
-                        ):  # Skip if entropy was computed in last 5 minutes
+                            age < cache_threshold
+                        ):  # Skip if entropy was computed within cache threshold
                             logger.debug(
                                 f"Skipping entropy computation for {video_id}, data is {age:.0f}s old"
                             )
@@ -1024,7 +1027,7 @@ def update_channel_metrics(
                             break
                         stored_data = object_data[video_id][obj_type]
                         age = time.time() - stored_data.get("timestamp", 0)
-                        if age >= 300:  # Data is stale
+                        if age >= cache_threshold:  # Data is stale
                             need_detection = True
                             logger.debug(
                                 f"Existing object data for {obj_type} is stale (age: {age:.0f}s), will recompute"
@@ -1085,7 +1088,11 @@ def update_channel_metrics(
 
 
 def update_metrics(
-    video_id, fetch_images=True, match_objects=None, debug=False
+    video_id,
+    fetch_images=True,
+    match_objects=None,
+    debug=False,
+    cache_threshold=CACHE_THRESHOLD,
 ):
     """Fetch video data and frames, calculate metrics, update storage."""
     global metrics_data, channel_metrics_data, entropy_data
@@ -1186,7 +1193,9 @@ def update_metrics(
         with entropy_data_lock:
             if video_id in entropy_data:
                 age = time.time() - entropy_data[video_id].get("timestamp", 0)
-                if age < 300:  # Skip if entropy was computed in last 5 minutes
+                if (
+                    age < cache_threshold
+                ):  # Skip if entropy was computed within cache threshold
                     logger.debug(
                         f"Using existing entropy data for {video_id}, data is {age:.0f}s old"
                     )
@@ -1263,7 +1272,7 @@ def update_metrics(
                         break
                     stored_data = object_data[video_id][obj_type]
                     age = time.time() - stored_data.get("timestamp", 0)
-                    if age >= 300:  # Data is stale
+                    if age >= cache_threshold:  # Data is stale
                         need_detection = True
                         logger.debug(
                             f"Existing object data for {obj_type} is stale (age: {age:.0f}s), will recompute"

@@ -31,6 +31,9 @@ MIN_INTERVAL = 30  # 30 seconds minimum
 DEFAULT_FRAME_SKIP = 30  # Skip 30 frames (~1 second at 30fps)
 MAX_RESULTS = 50  # Maximum results for API calls
 BATCH_SIZE = 50  # Batch size for API calls
+CACHE_THRESHOLD = (
+    300  # Cache threshold for entropy and object detection (seconds)
+)
 
 # Flask configuration
 FLASK_HOST = "0.0.0.0"

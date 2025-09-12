@@ -6,6 +6,7 @@ from flask import Flask, Response, request
 from prometheus_client import generate_latest
 
 from config import (
+    CACHE_THRESHOLD,
     CHANNEL_ID_PATTERN,
     DEFAULT_INTERVAL,
     MIN_INTERVAL,
@@ -32,10 +33,13 @@ def periodic_update(
     fetch_images=True,
     match_objects=None,
     debug=False,
+    cache_threshold=CACHE_THRESHOLD,
 ):
     """Periodically update video metrics."""
     while True:
-        update_metrics(video_id, fetch_images, match_objects, debug)
+        update_metrics(
+            video_id, fetch_images, match_objects, debug, cache_threshold
+        )
         time.sleep(interval)
 
 
@@ -46,11 +50,17 @@ def periodic_update_channel(
     disable_live=False,
     match_objects=None,
     debug=False,
+    cache_threshold=CACHE_THRESHOLD,
 ):
     """Periodically update channel metrics."""
     while True:
         update_channel_metrics(
-            channel_id, fetch_images, disable_live, match_objects, debug
+            channel_id,
+            fetch_images,
+            disable_live,
+            match_objects,
+            debug,
+            cache_threshold,
         )
         time.sleep(interval)
 
@@ -132,6 +142,7 @@ def metrics():
             fetch_images=first_request_fetch_images,
             match_objects=match_objects,
             debug=debug,
+            cache_threshold=interval,
         )
 
         # Start periodic update if not already running or parameters changed
@@ -145,7 +156,14 @@ def metrics():
         ):
             metrics.threads[thread_key] = threading.Thread(
                 target=periodic_update,
-                args=(video_id, interval, fetch_images, match_objects, debug),
+                args=(
+                    video_id,
+                    interval,
+                    fetch_images,
+                    match_objects,
+                    debug,
+                    interval,
+                ),
                 daemon=True,
             )
             metrics.threads[thread_key].start()
@@ -163,6 +181,7 @@ def metrics():
             disable_live=disable_live,
             match_objects={},
             debug=debug,
+            cache_threshold=interval,
         )
 
         # Start periodic update if not already running or parameters changed
@@ -183,6 +202,7 @@ def metrics():
                     disable_live,
                     match_objects,
                     debug,
+                    interval,
                 ),
                 daemon=True,
             )
